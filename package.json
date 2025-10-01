@@ -1,0 +1,53 @@
+{
+  "name": "code-companion-node-ts-template",
+  "version": "1.0.0",
+  "description": "Template for fastify apps",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "nodemon -e ts,json,env --exec ts-node --files -r dotenv/config src/index.ts",
+    "test": "LOG_LEVEL=error node -r ts-node/register --test src/**/*.test.ts",
+    "lint": "biome lint src",
+    "migrate": "ts-node -r dotenv/config src/migrate.ts",
+    "scrape:quora": "ts-node -r dotenv/config src/quora-playwright-scraper.ts",
+    "docker:build": "docker build --build-arg PORT=3000 -t code-companion-node-ts-template .",
+    "docker:run": "docker run -p  code-companion-node-ts-template"
+  },
+  "keywords": [],
+  "author": "companalysis",
+  "license": "MIT",
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@playwright/test": "^1.55.0",
+    "@types/fs-extra": "^11.0.4",
+    "@types/json2csv": "^5.0.7",
+    "@types/node-fetch": "^2.6.11",
+    "@types/pg": "^8.15.5",
+    "@types/supertest": "^6.0.3",
+    "dotenv": "^16.5.0",
+    "node-test-junit-reporter": "^2.0.1",
+    "nodemon": "^3.1.10",
+    "supertest": "^7.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk": "^2.6.0",
+    "@fast-csv/format": "^5.0.5",
+    "@fastify/autoload": "^6.3.0",
+    "@fastify/cors": "^10.0.1",
+    "axios": "^1.12.2",
+    "better-auth": "^1.3.11",
+    "cheerio": "^1.1.2",
+    "date-fns": "^4.1.0",
+    "fastify": "^5.2.0",
+    "fs-extra": "^11.3.2",
+    "json2csv": "^6.0.0-alpha.2",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.16.3",
+    "playwright": "^1.55.0",
+    "playwright-core": "^1.55.0",
+    "winston": "^3.14.2",
+    "zod": "^3.22.4"
+  }
+}

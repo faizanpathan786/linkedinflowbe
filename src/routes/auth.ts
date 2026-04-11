@@ -2,19 +2,36 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { FastifyRequest } from 'fastify';
 import { auth } from '../auth';
 
+// Helper: call a better-auth API method and forward the Response to Fastify
+async function forwardAuthResponse(
+  reply: FastifyReply,
+  fn: () => Promise<Response>
+) {
+  try {
+    const response = await fn();
+    const text = await response.text();
+    let body: any;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { message: text };
+    }
+    return reply.status(response.status).send(body);
+  } catch (err: any) {
+    console.error('better-auth error:', err?.message, err?.stack);
+    // better-auth throws APIError objects with a `status` and `body`
+    const status = err?.status ?? err?.statusCode ?? 400;
+    const message = err?.body?.message ?? err?.message ?? 'Request failed';
+    return reply.status(status).send({ error: message });
+  }
+}
+
 export default async function authRoutes(fastify: FastifyInstance) {
-  
-  // Get current session
+
   fastify.get('/api/me', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const session = await auth.api.getSession({
-        headers: request.headers as any,
-      });
-      
-      if (!session) {
-        return reply.code(401).send({ error: 'Not authenticated' });
-      }
-      
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) return reply.code(401).send({ error: 'Not authenticated' });
       return { user: session.user, session: session.session };
     } catch (error) {
       console.error('Session check error:', error);
@@ -22,81 +39,38 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Sign up endpoint
   fastify.post('/api/signup', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const body = request.body as { email: string; password: string; name?: string };
-      
-      const signupData: any = {
-        email: body.email,
-        password: body.password,
-          emailVerification: {
-        strategy: "code",
-      },
-      };
-      
-      if (body.name) {
-        signupData.name = body.name;
-      }
-      
-      const result = await auth.api.signUpEmail({
-        body: signupData,
-        headers: request.headers as any,
-      });
-
-      console.log('Signup result:', result);
-      
-      return result;
-    } catch (error: any) {
-      console.error('Signup error:', error);
-      return reply.code(400).send({ error: error.message || 'Signup failed' });
-    }
-  });
-
-  
-
-  // Sign in endpoint
-  fastify.post('/api/signin', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const body = request.body as { email: string; password: string };
-      
-      const result = await auth.api.signInEmail({
+    const body = request.body as { email: string; password: string; name?: string };
+    return forwardAuthResponse(reply, () =>
+      auth.api.signUpEmail({
         body: {
           email: body.email,
           password: body.password,
+          name: body.name ?? body.email.split('@')[0],
         },
         headers: request.headers as any,
-      });
-      
-      return result;
-    } catch (error: any) {
-      console.error('Signin error:', error);
-      return reply.code(400).send({ error: error.message || 'Signin failed' });
-    }
+        asResponse: true,
+      })
+    );
   });
 
-  // Sign out endpoint
-  fastify.post('/api/signout', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      // First check if there's an active session
-      const session = await auth.api.getSession({
+  fastify.post('/api/signin', async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { email: string; password: string };
+    return forwardAuthResponse(reply, () =>
+      auth.api.signInEmail({
+        body: { email: body.email, password: body.password },
         headers: request.headers as any,
-      });
-      
-      if (session) {
-        await auth.api.signOut({
-          headers: request.headers as any,
-        });
-      }
-      return { success: true };
-    } catch (error: any) {
-      console.error('Signout error:', error);
-      if (error.body?.code === 'FAILED_TO_GET_SESSION') {
-        console.log('No active session found during signout, treating as success');
-        return { success: true };
-      }
-      
-      return reply.code(500).send({ error: error.message || 'Signout failed' });
-    }
+        asResponse: true,
+      })
+    );
+  });
+
+  fastify.post('/api/signout', async (request: FastifyRequest, reply: FastifyReply) => {
+    return forwardAuthResponse(reply, () =>
+      auth.api.signOut({
+        headers: request.headers as any,
+        asResponse: true,
+      })
+    );
   });
 }

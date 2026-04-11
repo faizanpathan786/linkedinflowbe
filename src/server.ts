@@ -11,19 +11,8 @@ const server = Fastify({
   },
 });
 
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'http://localhost:3000',
-  'http://localhost:3001',
-].filter(Boolean) as string[];
-
 server.register(cors, {
-  origin: (origin, cb) => {
-    // Allow requests with no origin (server-to-server, curl, etc.)
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    return cb(new Error(`CORS: origin ${origin} not allowed`), false);
-  },
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],

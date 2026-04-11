@@ -1,6 +1,8 @@
 {
   "version": 2,
   "installCommand": "pnpm install --no-frozen-lockfile",
+  "buildCommand": "echo 'build handled by @vercel/node'",
+  "outputDirectory": ".",
   "builds": [
     {
       "src": "api/index.ts",

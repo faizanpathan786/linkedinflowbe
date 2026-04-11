@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
-import autoLoad from '@fastify/autoload';
-import path from 'node:path';
+import linkedinRoutes from './routes/linkedin';
+import oauthRoutes from './routes/oauth';
+import postsRoutes from './routes/posts';
+import authRoutes from './routes/auth';
 
 const server = Fastify({
   logger: {
@@ -8,14 +10,14 @@ const server = Fastify({
   },
 });
 
-// Register CORS
 server.register(require('@fastify/cors'), {
   origin: true,
-  credentials: true
+  credentials: true,
 });
 
-server.register(autoLoad, {
-  dir: path.join(__dirname, 'routes'),
-});
+server.register(linkedinRoutes);
+server.register(oauthRoutes);
+server.register(postsRoutes);
+server.register(authRoutes);
 
 export default server;

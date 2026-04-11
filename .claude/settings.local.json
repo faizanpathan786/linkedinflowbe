@@ -10,7 +10,9 @@
       "Bash(node -e ':*)",
       "Bash(node -e \"const p = require\\('./package.json'\\); const d = {...p.dependencies,...p.devDependencies}; console.log\\(Object.keys\\(d\\).filter\\(k=>k.includes\\('mail'\\)||k.includes\\('resend'\\)||k.includes\\('smtp'\\)\\)\\)\")",
       "Bash(npm uninstall:*)",
-      "Bash(pnpm install:*)"
+      "Bash(pnpm install:*)",
+      "Bash(grep -v \"//\")",
+      "Bash(pnpm add:*)"
     ]
   }
 }

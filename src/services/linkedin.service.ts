@@ -83,22 +83,21 @@ export default class LinkedInService {
   // Get user profile
   async getUserProfile(accessToken: string): Promise<any> {
     try {
-      const response = await axios.get(`${this.apiBaseUrl}/me`, {
+      const response = await axios.get(`${this.apiBaseUrl}/userinfo`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      const profileData = response.data;
+      const data = response.data;
       return {
-        id: profileData.id,
-        vanity_name: profileData.localizedFirstName,
+        id: data.sub,
+        vanity_name: data.name,
         metadata: {
-          firstName: profileData.firstName,
-          lastName: profileData.lastName,
-          localizedFirstName: profileData.localizedFirstName,
-          localizedLastName: profileData.localizedLastName,
-          headline: profileData.headline,
-          localizedHeadline: profileData.localizedHeadline,
-          profilePicture: profileData.profilePicture,
+          firstName: data.given_name,
+          lastName: data.family_name,
+          localizedFirstName: data.given_name,
+          localizedLastName: data.family_name,
+          picture: data.picture,
+          email: data.email,
         },
       };
     } catch (err: any) {

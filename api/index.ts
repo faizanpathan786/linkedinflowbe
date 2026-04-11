@@ -2,8 +2,18 @@ import 'dotenv/config';
 import type { IncomingMessage, ServerResponse } from 'http';
 import server from '../src/server';
 
-// Vercel serverless entry point — wraps Fastify for serverless execution
+let isReady = false;
+
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
-  await server.ready();
-  server.server.emit('request', req, res);
+  try {
+    if (!isReady) {
+      await server.ready();
+      isReady = true;
+    }
+    server.server.emit('request', req, res);
+  } catch (err: any) {
+    console.error('Fastify startup error:', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Server failed to start', message: err?.message }));
+  }
 }

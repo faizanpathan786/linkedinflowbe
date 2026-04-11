@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import linkedinRoutes from './routes/linkedin';
 import oauthRoutes from './routes/oauth';
 import postsRoutes from './routes/posts';
@@ -10,7 +11,7 @@ const server = Fastify({
   },
 });
 
-server.register(require('@fastify/cors'), {
+server.register(cors, {
   origin: true,
   credentials: true,
 });

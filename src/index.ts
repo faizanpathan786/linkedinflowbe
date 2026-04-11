@@ -1,5 +1,10 @@
+// Load environment variables as early as possible so modules that read
+// process.env (like `src/db.ts`) get the correct values.
+import 'dotenv/config';
+
 import server from './server';
 import client from './db';
+import { startScheduler } from './services/scheduler';
 
 const port = Number(process.env.PORT) || 3000;
 
@@ -15,6 +20,7 @@ server.listen(
     }
 
     server.log.info(`Server running on ${address}`);
+    startScheduler(server);
   },
 );
 

@@ -1,0 +1,62 @@
+{
+  "features": [
+    {
+      "confidence": 0.6,
+      "file_count": 1,
+      "name": "Middleware",
+      "slug": "middleware",
+      "test_count": 0,
+      "type": "feature"
+    },
+    {
+      "confidence": 0.55,
+      "file_count": 4,
+      "name": "Routes",
+      "slug": "routes",
+      "test_count": 0,
+      "type": "feature"
+    },
+    {
+      "confidence": 0.55,
+      "file_count": 2,
+      "name": "Services",
+      "slug": "services",
+      "test_count": 0,
+      "type": "feature"
+    }
+  ],
+  "modules": [
+    {
+      "confidence": 0.7,
+      "file_count": 1,
+      "name": "src/lib",
+      "slug": "src-lib",
+      "test_count": 0,
+      "type": "module"
+    },
+    {
+      "confidence": 0.7,
+      "file_count": 1,
+      "name": "src/middleware",
+      "slug": "src-middleware",
+      "test_count": 0,
+      "type": "module"
+    },
+    {
+      "confidence": 0.65,
+      "file_count": 4,
+      "name": "src/routes",
+      "slug": "src-routes",
+      "test_count": 0,
+      "type": "module"
+    },
+    {
+      "confidence": 0.65,
+      "file_count": 2,
+      "name": "src/services",
+      "slug": "src-services",
+      "test_count": 0,
+      "type": "module"
+    }
+  ]
+}

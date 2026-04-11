@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { bearer } from "better-auth/plugins";
 import { Pool } from "pg";
 
 
@@ -8,7 +9,8 @@ export const auth = betterAuth({
     }),
     emailAndPassword:{
         enabled: true,
-    }
+    },
+    plugins: [bearer()],
 })
 
 export type Session = typeof auth.$Infer.Session;

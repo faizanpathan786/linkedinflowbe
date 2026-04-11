@@ -1,0 +1,36 @@
+{
+  "file_count": 8,
+  "sources": {
+    "src/lib/email.ts": [
+      "module:src/lib"
+    ],
+    "src/middleware/auth.ts": [
+      "feature:Middleware",
+      "module:src/middleware"
+    ],
+    "src/routes/auth.ts": [
+      "feature:Routes",
+      "module:src/routes"
+    ],
+    "src/routes/linkedin.ts": [
+      "feature:Routes",
+      "module:src/routes"
+    ],
+    "src/routes/oauth.ts": [
+      "feature:Routes",
+      "module:src/routes"
+    ],
+    "src/routes/posts.ts": [
+      "feature:Routes",
+      "module:src/routes"
+    ],
+    "src/services/linkedin.service.ts": [
+      "feature:Services",
+      "module:src/services"
+    ],
+    "src/services/scheduler.ts": [
+      "feature:Services",
+      "module:src/services"
+    ]
+  }
+}

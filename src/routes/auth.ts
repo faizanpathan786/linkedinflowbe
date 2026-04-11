@@ -50,7 +50,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         },
         headers: request.headers as any,
         asResponse: true,
-      }) as Promise<Response>
+      }) as unknown as Promise<Response>
     );
   });
 
@@ -61,7 +61,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         body: { email: body.email, password: body.password },
         headers: request.headers as any,
         asResponse: true,
-      }) as Promise<Response>
+      }) as unknown as Promise<Response>
     );
   });
 
@@ -70,7 +70,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
       auth.api.signOut({
         headers: request.headers as any,
         asResponse: true,
-      }) as Promise<Response>
+      }) as unknown as Promise<Response>
     );
   });
 }

@@ -1,19 +1,23 @@
 import 'dotenv/config';
 import type { IncomingMessage, ServerResponse } from 'http';
-import server from '../src/server';
 
-let isReady = false;
+let serverInstance: any = null;
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   try {
-    if (!isReady) {
+    if (!serverInstance) {
+      const { default: server } = await import('../src/server');
       await server.ready();
-      isReady = true;
+      serverInstance = server;
     }
-    server.server.emit('request', req, res);
+    serverInstance.server.emit('request', req, res);
   } catch (err: any) {
-    console.error('Fastify startup error:', err);
+    console.error('Fastify startup error:', err?.message, err?.stack);
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Server failed to start', message: err?.message }));
+    res.end(JSON.stringify({
+      error: 'Server failed to start',
+      message: err?.message,
+      stack: err?.stack,
+    }));
   }
 }

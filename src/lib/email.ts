@@ -11,8 +11,11 @@ export async function sendPostPublishedEmail(
   const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
   const preview = postContent.length > 200 ? postContent.slice(0, 200) + '…' : postContent;
   const formattedDate = new Date(publishedAt).toLocaleString('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 
   const response = await resend.emails.send({

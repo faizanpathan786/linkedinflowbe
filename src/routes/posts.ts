@@ -1,6 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Pool } from 'pg';
-import * as XLSX from 'xlsx';
 import { auth } from '../auth';
 import LinkedInService from '../services/linkedin.service';
 import { sendPostPublishedEmail } from '../lib/email';
@@ -614,6 +613,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     const session = await auth.api.getSession({ headers: request.headers as any });
     if (!session) return reply.status(401).send({ error: 'Unauthorized' });
 
+    const XLSX = await import('xlsx');
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet([
       { content: 'Your post text here', post_type: 'text', link_url: '', scheduled_at: '2026-05-01T10:00:00', publish_now: 'false' },
@@ -636,6 +636,8 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     if (!session) return reply.status(401).send({ error: 'Unauthorized' });
 
     const userId = session.user.id;
+
+    const XLSX = await import('xlsx');
 
     let fileBuffer: Buffer;
     try {

@@ -7,7 +7,6 @@ import postsRoutes from './routes/posts';
 import authRoutes from './routes/auth';
 import schedulerRoutes from './routes/scheduler';
 import aiRoutes from './routes/ai';
-import importRoutes from './routes/import';
 
 const server = Fastify({
   logger: {
@@ -37,6 +36,5 @@ server.register(postsRoutes);
 server.register(authRoutes);
 server.register(schedulerRoutes);
 server.register(aiRoutes);
-server.register(importRoutes);
 
 export default server;

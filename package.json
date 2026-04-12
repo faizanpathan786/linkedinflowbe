@@ -35,10 +35,12 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
     "@browserbasehq/sdk": "^2.6.0",
     "@fast-csv/format": "^5.0.5",
     "@fastify/autoload": "^6.3.0",
     "@fastify/cors": "^10.0.1",
+    "@fastify/multipart": "^10.0.0",
     "@supabase/supabase-js": "^2.74.0",
     "axios": "^1.12.2",
     "better-auth": "^1.3.7",
@@ -54,6 +56,7 @@
     "playwright-core": "^1.55.0",
     "resend": "^6.10.0",
     "winston": "^3.14.2",
+    "xlsx": "^0.18.5",
     "zod": "^3.22.4"
   }
 }

@@ -20,7 +20,10 @@ server.listen(
     }
 
     server.log.info(`Server running on ${address}`);
-    startScheduler(server);
+    // Only run node-cron locally — in production Vercel Cron calls /scheduler/run
+    if (process.env.NODE_ENV !== 'production') {
+      startScheduler(server);
+    }
   },
 );
 

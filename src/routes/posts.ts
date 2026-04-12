@@ -377,4 +377,135 @@ export default async function postsRoutes(fastify: FastifyInstance) {
       }
     }
   );
+
+  // POST /posts/bulk — create multiple posts at once
+  // - publish_now: true  → sets scheduled_at = NOW() so cron publishes them immediately (respects rate limits)
+  // - scheduled_at       → if multiple posts share the same time, they are auto-staggered 1 min apart
+  // - neither            → saved as drafts
+  fastify.post(
+    '/posts/bulk',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['posts'],
+          properties: {
+            posts: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 50,
+              items: {
+                type: 'object',
+                required: ['content'],
+                properties: {
+                  content: { type: 'string', minLength: 1 },
+                  post_type: { type: 'string', enum: ['text', 'image', 'link'], default: 'text' },
+                  link_url: { type: 'string' },
+                  publish_now: { type: 'boolean', default: false },
+                  scheduled_at: { type: 'string', format: 'date-time' },
+                  image_base64: { type: 'string' },
+                  image_type: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{
+        Body: {
+          posts: Array<CreatePostBody>;
+        };
+      }>,
+      reply: FastifyReply
+    ) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+
+      const userId = session.user.id;
+      const { posts } = request.body;
+
+      // Track how many posts are being queued for the same scheduled_at time
+      // so we can stagger them 1 minute apart to avoid LinkedIn rate limits
+      const scheduledAtCount: Record<string, number> = {};
+
+      const client = await pool.connect();
+      try {
+        const created: any[] = [];
+        const errors: Array<{ index: number; message: string }> = [];
+
+        for (let i = 0; i < posts.length; i++) {
+          const {
+            content,
+            post_type = 'text',
+            link_url,
+            publish_now = false,
+            scheduled_at,
+            image_base64,
+            image_type,
+          } = posts[i];
+
+          try {
+            let scheduledDate: Date | null = null;
+            let status: PostStatus = 'draft';
+
+            if (publish_now) {
+              // Queue for immediate publish via cron — avoids Vercel timeout
+              scheduledDate = new Date();
+              status = 'scheduled';
+            } else if (scheduled_at) {
+              const parsed = new Date(scheduled_at);
+              if (parsed <= new Date()) {
+                errors.push({ index: i, message: 'scheduled_at must be a future datetime' });
+                continue;
+              }
+
+              // Auto-stagger: if multiple posts share the same scheduled_at,
+              // offset each by 1 minute to avoid LinkedIn rate limits
+              const key = parsed.toISOString();
+              const offset = scheduledAtCount[key] ?? 0;
+              scheduledAtCount[key] = offset + 1;
+
+              scheduledDate = new Date(parsed.getTime() + offset * 60 * 1000);
+              status = 'scheduled';
+            }
+
+            const result = await client.query(
+              `INSERT INTO public.posts
+                 (user_id, content, post_type, link_url, status, scheduled_at, image_base64, image_type)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               RETURNING id, user_id, content, post_type, link_url, status, scheduled_at, image_type, created_at`,
+              [
+                userId,
+                content,
+                post_type,
+                link_url || null,
+                status,
+                scheduledDate,
+                image_base64 || null,
+                image_type || null,
+              ]
+            );
+
+            created.push(result.rows[0]);
+          } catch (err: any) {
+            errors.push({ index: i, message: err.message });
+          }
+        }
+
+        return reply.status(201).send({
+          success: true,
+          created: created.length,
+          failed: errors.length,
+          posts: created,
+          errors: errors.length > 0 ? errors : undefined,
+        });
+      } finally {
+        client.release();
+      }
+    }
+  );
 }

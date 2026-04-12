@@ -4,6 +4,7 @@ import linkedinRoutes from './routes/linkedin';
 import oauthRoutes from './routes/oauth';
 import postsRoutes from './routes/posts';
 import authRoutes from './routes/auth';
+import schedulerRoutes from './routes/scheduler';
 
 const server = Fastify({
   logger: {
@@ -25,5 +26,6 @@ server.register(linkedinRoutes);
 server.register(oauthRoutes);
 server.register(postsRoutes);
 server.register(authRoutes);
+server.register(schedulerRoutes);
 
 export default server;

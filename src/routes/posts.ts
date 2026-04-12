@@ -260,16 +260,22 @@ export default async function postsRoutes(fastify: FastifyInstance) {
 
       const client = await pool.connect();
       try {
-        const postResult = await client.query(
-          `SELECT * FROM public.posts WHERE id = $1 AND user_id = $2`,
-          [id, userId]
+        // First check post exists at all
+        const existsResult = await client.query(
+          `SELECT * FROM public.posts WHERE id = $1`,
+          [id]
         );
 
-        if (postResult.rows.length === 0) {
+        if (existsResult.rows.length === 0) {
           return reply.status(404).send({ error: 'Post not found' });
         }
 
-        const post = postResult.rows[0];
+        // Then check ownership separately so we can return 403
+        if (existsResult.rows[0].user_id !== userId) {
+          return reply.status(403).send({ error: 'Forbidden' });
+        }
+
+        const post = existsResult.rows[0];
 
         if (post.status !== 'draft' && post.status !== 'scheduled') {
           return reply.status(400).send({
@@ -284,16 +290,15 @@ export default async function postsRoutes(fastify: FastifyInstance) {
 
         if ('scheduled_at' in request.body) {
           if (scheduled_at === null || scheduled_at === '') {
-            // Clear schedule → back to draft
             newScheduledAt = null;
             newStatus = 'draft';
           } else {
             const parsed = new Date(scheduled_at!);
             if (isNaN(parsed.getTime())) {
-              return reply.status(400).send({ error: 'Invalid scheduled_at format' });
+              return reply.status(400).send({ message: 'Invalid scheduled_at format' });
             }
             if (parsed <= new Date()) {
-              return reply.status(400).send({ error: 'scheduled_at must be a future datetime' });
+              return reply.status(400).send({ message: 'scheduled_at must be in the future' });
             }
             newScheduledAt = parsed;
             newStatus = 'scheduled';

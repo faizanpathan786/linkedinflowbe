@@ -224,19 +224,6 @@ export default async function postsRoutes(fastify: FastifyInstance) {
   // PATCH /posts/:id — update content, link_url, post_type, scheduled_at
   fastify.patch(
     '/posts/:id',
-    {
-      schema: {
-        body: {
-          type: 'object',
-          properties: {
-            content: { type: 'string', minLength: 1 },
-            post_type: { type: 'string', enum: ['text', 'image', 'link'] },
-            link_url: { nullable: true, type: 'string' },
-            scheduled_at: { nullable: true, type: 'string' },
-          },
-        },
-      },
-    },
     async (
       request: FastifyRequest<{
         Params: PostParams;

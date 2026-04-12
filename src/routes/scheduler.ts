@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Pool } from 'pg';
 import LinkedInService from '../services/linkedin.service';
+import { sendPostPublishedEmail } from '../lib/email';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -110,6 +111,21 @@ export default async function schedulerRoutes(fastify: FastifyInstance) {
 
               fastify.log.info(`Scheduler: post ${post.id} published successfully`);
               published++;
+
+              // Fire-and-forget email notification
+              try {
+                const userResult = await client.query(
+                  `SELECT name, email FROM public."user" WHERE id = $1`,
+                  [post.user_id]
+                );
+                if (userResult.rows.length > 0) {
+                  const { name, email } = userResult.rows[0];
+                  sendPostPublishedEmail(email, name, post.content, new Date().toISOString())
+                    .catch((err: any) => fastify.log.error(`Scheduler: email failed for post ${post.id}: ${err.message}`));
+                }
+              } catch (emailErr: any) {
+                fastify.log.error(`Scheduler: could not fetch user for email: ${emailErr.message}`);
+              }
             } catch (err: any) {
               // Handle LinkedIn rate limit — re-queue for next cron run instead of failing
               if (err?.response?.status === 429) {

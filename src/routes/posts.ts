@@ -221,6 +221,113 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // PATCH /posts/:id — update content, link_url, post_type, scheduled_at
+  fastify.patch(
+    '/posts/:id',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', minLength: 1 },
+            post_type: { type: 'string', enum: ['text', 'image', 'link'] },
+            link_url: { type: ['string', 'null'] },
+            scheduled_at: { type: ['string', 'null'] },
+          },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{
+        Params: PostParams;
+        Body: {
+          content?: string;
+          post_type?: PostType;
+          link_url?: string | null;
+          scheduled_at?: string | null;
+        };
+      }>,
+      reply: FastifyReply
+    ) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+
+      const userId = session.user.id;
+      const { id } = request.params;
+      const { content, post_type, link_url, scheduled_at } = request.body;
+
+      const client = await pool.connect();
+      try {
+        const postResult = await client.query(
+          `SELECT * FROM public.posts WHERE id = $1 AND user_id = $2`,
+          [id, userId]
+        );
+
+        if (postResult.rows.length === 0) {
+          return reply.status(404).send({ error: 'Post not found' });
+        }
+
+        const post = postResult.rows[0];
+
+        if (post.status !== 'draft' && post.status !== 'scheduled') {
+          return reply.status(400).send({
+            error: 'Cannot edit post',
+            message: `Only draft or scheduled posts can be edited. This post is "${post.status}".`,
+          });
+        }
+
+        // Determine new scheduled_at and status
+        let newScheduledAt: Date | null = post.scheduled_at;
+        let newStatus: PostStatus = post.status;
+
+        if ('scheduled_at' in request.body) {
+          if (scheduled_at === null || scheduled_at === '') {
+            // Clear schedule → back to draft
+            newScheduledAt = null;
+            newStatus = 'draft';
+          } else {
+            const parsed = new Date(scheduled_at!);
+            if (isNaN(parsed.getTime())) {
+              return reply.status(400).send({ error: 'Invalid scheduled_at format' });
+            }
+            if (parsed <= new Date()) {
+              return reply.status(400).send({ error: 'scheduled_at must be a future datetime' });
+            }
+            newScheduledAt = parsed;
+            newStatus = 'scheduled';
+          }
+        }
+
+        const updated = await client.query(
+          `UPDATE public.posts
+           SET content      = COALESCE($1, content),
+               post_type    = COALESCE($2, post_type),
+               link_url     = $3,
+               scheduled_at = $4,
+               status       = $5,
+               updated_at   = NOW()
+           WHERE id = $6 AND user_id = $7
+           RETURNING id, user_id, content, post_type, link_url, status, scheduled_at, published_at, image_type, created_at, updated_at`,
+          [
+            content ?? null,
+            post_type ?? null,
+            'link_url' in request.body ? (link_url ?? null) : post.link_url,
+            newScheduledAt,
+            newStatus,
+            id,
+            userId,
+          ]
+        );
+
+        return reply.send({ success: true, post: updated.rows[0] });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
   // PATCH /posts/:id/publish — publish a draft post to LinkedIn
   fastify.patch(
     '/posts/:id/publish',

@@ -231,8 +231,8 @@ export default async function postsRoutes(fastify: FastifyInstance) {
           properties: {
             content: { type: 'string', minLength: 1 },
             post_type: { type: 'string', enum: ['text', 'image', 'link'] },
-            link_url: { type: ['string', 'null'] },
-            scheduled_at: { type: ['string', 'null'] },
+            link_url: { nullable: true, type: 'string' },
+            scheduled_at: { nullable: true, type: 'string' },
           },
         },
       },

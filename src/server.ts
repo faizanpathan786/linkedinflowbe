@@ -1,6 +1,5 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import multipart from '@fastify/multipart';
 import linkedinRoutes from './routes/linkedin';
 import oauthRoutes from './routes/oauth';
 import postsRoutes from './routes/posts';
@@ -11,12 +10,6 @@ import aiRoutes from './routes/ai';
 const server = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || 'info',
-  },
-});
-
-server.register(multipart, {
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB max
   },
 });
 

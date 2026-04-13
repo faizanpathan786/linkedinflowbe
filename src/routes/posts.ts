@@ -608,130 +608,132 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // GET /posts/import/template — download Excel template
+  // GET /posts/import/template — returns template rows as JSON
+  // Frontend converts to Excel using a client-side library (e.g. xlsx)
   fastify.get('/posts/import/template', async (request: FastifyRequest, reply: FastifyReply) => {
     const session = await auth.api.getSession({ headers: request.headers as any });
     if (!session) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const XLSX = await import('xlsx');
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet([
-      { content: 'Your post text here', post_type: 'text', link_url: '', scheduled_at: '2026-05-01T10:00:00', publish_now: 'false' },
-      { content: 'Post with a link', post_type: 'link', link_url: 'https://example.com', scheduled_at: '2026-05-02T10:00:00', publish_now: 'false' },
-      { content: 'Publish immediately', post_type: 'text', link_url: '', scheduled_at: '', publish_now: 'true' },
-    ]);
-    ws['!cols'] = [{ wch: 50 }, { wch: 12 }, { wch: 40 }, { wch: 25 }, { wch: 15 }];
-    XLSX.utils.book_append_sheet(wb, ws, 'Posts');
-
-    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    return reply
-      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      .header('Content-Disposition', 'attachment; filename="posts_template.xlsx"')
-      .send(buffer);
+    return reply.send({
+      columns: ['content', 'post_type', 'link_url', 'scheduled_at', 'publish_now'],
+      example_rows: [
+        { content: 'Your post text here', post_type: 'text', link_url: '', scheduled_at: '2026-05-01T10:00:00', publish_now: 'false' },
+        { content: 'Post with a link', post_type: 'link', link_url: 'https://example.com', scheduled_at: '2026-05-02T10:00:00', publish_now: 'false' },
+        { content: 'Publish immediately', post_type: 'text', link_url: '', scheduled_at: '', publish_now: 'true' },
+      ],
+    });
   });
 
-  // POST /posts/import — upload Excel/CSV and bulk create posts
-  fastify.post('/posts/import', async (request: FastifyRequest, reply: FastifyReply) => {
-    const session = await auth.api.getSession({ headers: request.headers as any });
-    if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+  // POST /posts/import — accepts base64-encoded Excel/CSV file in JSON body
+  // Body: { file: "<base64 string>", filename: "posts.xlsx" }
+  fastify.post(
+    '/posts/import',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['file', 'filename'],
+          properties: {
+            file: { type: 'string' },
+            filename: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Body: { file: string; filename: string } }>,
+      reply: FastifyReply
+    ) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const userId = session.user.id;
+      const userId = session.user.id;
+      const { file, filename } = request.body;
 
-    const XLSX = await import('xlsx');
-
-    let fileBuffer: Buffer;
-    try {
-      const data = await request.file();
-      if (!data) return reply.status(400).send({ error: 'No file uploaded' });
-
-      const filename = data.filename.toLowerCase();
-      if (!filename.endsWith('.xlsx') && !filename.endsWith('.xls') && !filename.endsWith('.csv')) {
+      const fname = filename.toLowerCase();
+      if (!fname.endsWith('.xlsx') && !fname.endsWith('.xls') && !fname.endsWith('.csv')) {
         return reply.status(400).send({ error: 'Only .xlsx, .xls, and .csv files are supported' });
       }
 
-      const chunks: Buffer[] = [];
-      for await (const chunk of data.file) chunks.push(chunk);
-      fileBuffer = Buffer.concat(chunks);
-    } catch (err: any) {
-      return reply.status(400).send({ error: 'Failed to read file', message: err.message });
-    }
-
-    let rows: any[];
-    try {
-      const wb = XLSX.read(fileBuffer, { type: 'buffer' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
-    } catch (err: any) {
-      return reply.status(400).send({ error: 'Failed to parse file', message: err.message });
-    }
-
-    if (rows.length === 0) return reply.status(400).send({ error: 'File has no data rows' });
-    if (rows.length > 50) return reply.status(400).send({ error: 'Maximum 50 rows per import' });
-
-    const created: any[] = [];
-    const errors: Array<{ row: number; message: string }> = [];
-    const scheduledAtCount: Record<string, number> = {};
-
-    const client = await pool.connect();
-    try {
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const rowNum = i + 2;
-        const content = String(row.content || '').trim();
-
-        if (!content) { errors.push({ row: rowNum, message: 'content is required' }); continue; }
-
-        const validTypes = ['text', 'image', 'link'];
-        const post_type = validTypes.includes(row.post_type) ? row.post_type : 'text';
-        const link_url = String(row.link_url || '').trim() || null;
-        const publish_now = ['true', 'yes', '1', true].includes(
-          typeof row.publish_now === 'string' ? row.publish_now.toLowerCase().trim() : row.publish_now
-        );
-
-        let scheduledDate: Date | null = null;
-        let status: PostStatus = 'draft';
-
-        if (publish_now) {
-          scheduledDate = new Date();
-          status = 'scheduled';
-        } else if (row.scheduled_at) {
-          const parsed = typeof row.scheduled_at === 'number'
-            ? new Date((row.scheduled_at - 25569) * 86400 * 1000)
-            : new Date(row.scheduled_at);
-
-          if (isNaN(parsed.getTime())) { errors.push({ row: rowNum, message: 'Invalid scheduled_at format' }); continue; }
-          if (parsed <= new Date()) { errors.push({ row: rowNum, message: 'scheduled_at must be a future date' }); continue; }
-
-          const key = parsed.toISOString();
-          const offset = scheduledAtCount[key] ?? 0;
-          scheduledAtCount[key] = offset + 1;
-          scheduledDate = new Date(parsed.getTime() + offset * 60 * 1000);
-          status = 'scheduled';
-        }
-
-        try {
-          const result = await client.query(
-            `INSERT INTO public.posts (user_id, content, post_type, link_url, status, scheduled_at)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id, content, post_type, link_url, status, scheduled_at, created_at`,
-            [userId, content, post_type, link_url, status, scheduledDate]
-          );
-          created.push({ row: rowNum, ...result.rows[0] });
-        } catch (err: any) {
-          errors.push({ row: rowNum, message: err.message });
-        }
+      const XLSX = await import('xlsx');
+      let rows: any[];
+      try {
+        const fileBuffer = Buffer.from(file, 'base64');
+        const wb = XLSX.read(fileBuffer, { type: 'buffer' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      } catch (err: any) {
+        return reply.status(400).send({ error: 'Failed to parse file', message: err.message });
       }
-    } finally {
-      client.release();
-    }
 
-    return reply.status(201).send({
-      success: true,
-      imported: created.length,
-      failed: errors.length,
-      total: rows.length,
-      posts: created,
-      errors: errors.length > 0 ? errors : undefined,
-    });
-  });
+      if (rows.length === 0) return reply.status(400).send({ error: 'File has no data rows' });
+      if (rows.length > 50) return reply.status(400).send({ error: 'Maximum 50 rows per import' });
+
+      const created: any[] = [];
+      const errors: Array<{ row: number; message: string }> = [];
+      const scheduledAtCount: Record<string, number> = {};
+
+      const client = await pool.connect();
+      try {
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          const rowNum = i + 2;
+          const content = String(row.content || '').trim();
+
+          if (!content) { errors.push({ row: rowNum, message: 'content is required' }); continue; }
+
+          const validTypes = ['text', 'image', 'link'];
+          const post_type = validTypes.includes(row.post_type) ? row.post_type : 'text';
+          const link_url = String(row.link_url || '').trim() || null;
+          const publish_now = ['true', 'yes', '1', true].includes(
+            typeof row.publish_now === 'string' ? row.publish_now.toLowerCase().trim() : row.publish_now
+          );
+
+          let scheduledDate: Date | null = null;
+          let status: PostStatus = 'draft';
+
+          if (publish_now) {
+            scheduledDate = new Date();
+            status = 'scheduled';
+          } else if (row.scheduled_at) {
+            const parsed = typeof row.scheduled_at === 'number'
+              ? new Date((row.scheduled_at - 25569) * 86400 * 1000)
+              : new Date(row.scheduled_at);
+
+            if (isNaN(parsed.getTime())) { errors.push({ row: rowNum, message: 'Invalid scheduled_at format' }); continue; }
+            if (parsed <= new Date()) { errors.push({ row: rowNum, message: 'scheduled_at must be a future date' }); continue; }
+
+            const key = parsed.toISOString();
+            const offset = scheduledAtCount[key] ?? 0;
+            scheduledAtCount[key] = offset + 1;
+            scheduledDate = new Date(parsed.getTime() + offset * 60 * 1000);
+            status = 'scheduled';
+          }
+
+          try {
+            const result = await client.query(
+              `INSERT INTO public.posts (user_id, content, post_type, link_url, status, scheduled_at)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING id, content, post_type, link_url, status, scheduled_at, created_at`,
+              [userId, content, post_type, link_url, status, scheduledDate]
+            );
+            created.push({ row: rowNum, ...result.rows[0] });
+          } catch (err: any) {
+            errors.push({ row: rowNum, message: err.message });
+          }
+        }
+      } finally {
+        client.release();
+      }
+
+      return reply.status(201).send({
+        success: true,
+        imported: created.length,
+        failed: errors.length,
+        total: rows.length,
+        posts: created,
+        errors: errors.length > 0 ? errors : undefined,
+      });
+    }
+  );
 }

@@ -626,24 +626,10 @@ export default async function postsRoutes(fastify: FastifyInstance) {
 
   // POST /posts/import — accepts base64-encoded Excel/CSV file in JSON body
   // Body: { file: "<base64 string>", filename: "posts.xlsx" }
-  fastify.post(
-    '/posts/import',
-    {
-      schema: {
-        body: {
-          type: 'object',
-          required: ['file', 'filename'],
-          properties: {
-            file: { type: 'string' },
-            filename: { type: 'string' },
-          },
-        },
-      },
-    },
-    async (
-      request: FastifyRequest<{ Body: { file: string; filename: string } }>,
-      reply: FastifyReply
-    ) => {
+  fastify.post('/posts/import', async (
+    request: FastifyRequest<{ Body: { file: string; filename: string } }>,
+    reply: FastifyReply
+  ) => {
       const session = await auth.api.getSession({ headers: request.headers as any });
       if (!session) return reply.status(401).send({ error: 'Unauthorized' });
 

@@ -28,7 +28,7 @@ server.register(cors, {
   exposedHeaders: ['set-cookie'],
 });
 
-server.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString() }));
+server.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString(), version: 'v6-import-fixed' }));
 server.get('/debug/routes', async () => ({ routes: server.printRoutes() }));
 
 // POST /posts/import — registered at top level to guarantee route registration

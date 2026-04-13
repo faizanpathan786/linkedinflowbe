@@ -22,6 +22,7 @@ server.register(cors, {
 });
 
 server.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString() }));
+server.get('/debug/routes', async () => ({ routes: server.printRoutes() }));
 
 server.register(linkedinRoutes);
 server.register(oauthRoutes);

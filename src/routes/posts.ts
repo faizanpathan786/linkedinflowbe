@@ -483,34 +483,6 @@ export default async function postsRoutes(fastify: FastifyInstance) {
   // - neither            → saved as drafts
   fastify.post(
     '/posts/bulk',
-    {
-      schema: {
-        body: {
-          type: 'object',
-          required: ['posts'],
-          properties: {
-            posts: {
-              type: 'array',
-              minItems: 1,
-              maxItems: 50,
-              items: {
-                type: 'object',
-                required: ['content'],
-                properties: {
-                  content: { type: 'string', minLength: 1 },
-                  post_type: { type: 'string', enum: ['text', 'image', 'link'], default: 'text' },
-                  link_url: { type: 'string' },
-                  publish_now: { type: 'boolean', default: false },
-                  scheduled_at: { type: 'string', format: 'date-time' },
-                  image_base64: { type: 'string' },
-                  image_type: { type: 'string' },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
     async (
       request: FastifyRequest<{
         Body: {

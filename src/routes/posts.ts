@@ -580,12 +580,11 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // GET /posts/import/template — returns template rows as JSON
-  // Frontend converts to Excel using a client-side library (e.g. xlsx)
+  // NOTE: POST /posts/import is registered in server.ts directly
+  // This is a placeholder to avoid duplicate route errors
   fastify.get('/posts/import/template', async (request: FastifyRequest, reply: FastifyReply) => {
     const session = await auth.api.getSession({ headers: request.headers as any });
     if (!session) return reply.status(401).send({ error: 'Unauthorized' });
-
     return reply.send({
       columns: ['content', 'post_type', 'link_url', 'scheduled_at', 'publish_now'],
       example_rows: [
@@ -596,9 +595,9 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     });
   });
 
-  // POST /posts/import — accepts base64-encoded Excel/CSV file in JSON body
-  // Body: { file: "<base64 string>", filename: "posts.xlsx" }
-  fastify.post('/posts/import', async (
+  // DEAD CODE — kept to avoid breaking the file structure
+  // The actual POST /posts/import handler lives in server.ts
+  if (false) fastify.post('/posts/import', async (
     request: FastifyRequest<{ Body: { file: string; filename: string } }>,
     reply: FastifyReply
   ) => {

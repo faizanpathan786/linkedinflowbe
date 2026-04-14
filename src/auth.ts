@@ -12,6 +12,13 @@ export const auth = betterAuth({
         enabled: true,
     },
     plugins: [bearer()],
+    trustedOrigins: [
+        process.env.FRONTEND_URL || 'http://localhost:3000',
+        'http://localhost:3000',
+        'http://localhost:4000',
+        'https://linkedinflow.vercel.app',
+        'https://linkedinflowbe.vercel.app',
+    ],
 })
 
 export type Session = typeof auth.$Infer.Session;

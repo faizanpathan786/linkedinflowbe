@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { Pool } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import LinkedInService from './linkedin.service';
+import { downloadVideoFromStorage, deleteVideoFromStorage } from '../lib/supabase';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -23,8 +24,9 @@ export function startScheduler(fastify: FastifyInstance) {
         link_url: string | null;
         image_base64: string | null;
         image_type: string | null;
+        video_storage_path: string | null;
       }>(
-        `SELECT id, user_id, content, link_url, image_base64, image_type
+        `SELECT id, user_id, content, link_url, image_base64, image_type, video_storage_path
          FROM public.posts
          WHERE status = 'scheduled' AND scheduled_at <= NOW()`
       );
@@ -67,10 +69,17 @@ export function startScheduler(fastify: FastifyInstance) {
             ? { buffer: Buffer.from(post.image_base64, 'base64'), type: post.image_type || 'image/jpeg' }
             : undefined;
 
+          let videoPayload: { buffer: Buffer; type: string } | undefined;
+          if (post.video_storage_path) {
+            const { buffer, contentType } = await downloadVideoFromStorage(post.video_storage_path);
+            videoPayload = { buffer, type: contentType };
+          }
+
           const linkedinResponse = await linkedinService.createUnifiedPost(tokenData, {
             text: post.content,
             linkUrl: post.link_url ?? undefined,
             image: imagePayload,
+            video: videoPayload,
           });
 
           await client.query(
@@ -80,10 +89,17 @@ export function startScheduler(fastify: FastifyInstance) {
                  published_at = NOW(),
                  updated_at = NOW(),
                  image_base64 = NULL,
-                 image_type = NULL
+                 image_type = NULL,
+                 video_storage_path = NULL
              WHERE id = $2`,
             [linkedinResponse?.id || null, post.id]
           );
+
+          if (post.video_storage_path) {
+            deleteVideoFromStorage(post.video_storage_path).catch((e) =>
+              fastify.log.error(`Scheduler: failed to delete video from storage for post ${post.id}: ${e.message}`)
+            );
+          }
 
           fastify.log.info(`Scheduler: post ${post.id} published successfully`);
         } catch (err: any) {

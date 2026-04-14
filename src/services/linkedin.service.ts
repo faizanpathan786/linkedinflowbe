@@ -250,6 +250,71 @@ export default class LinkedInService {
     }
   }
 
+  // Video post — uses /v2/assets with feedshare-video recipe (same approach as images,
+  // works with w_member_social scope without needing LinkedIn Marketing API access)
+  async uploadVideoToLinkedIn(
+    accessToken: any,
+    videoBuffer: Buffer,
+    videoType: string,
+  ): Promise<string> {
+    // Normalize person URN
+    if (!accessToken.person_urn) {
+      const profileRes = await axios.get(`${this.apiBaseUrl}/userinfo`, {
+        headers: { Authorization: `Bearer ${accessToken.access_token}` },
+      });
+      accessToken.person_urn = profileRes.data.sub;
+    } else {
+      accessToken.person_urn = accessToken.person_urn.replace(/^urn:li:person:/, '');
+    }
+
+    const authHeaders = {
+      Authorization: `Bearer ${accessToken.access_token}`,
+      'Content-Type': 'application/json',
+      'X-Restli-Protocol-Version': '2.0.0',
+    };
+
+    // Step 1: Register upload via /v2/assets (same endpoint as images)
+    this.fastify.log.info('LinkedIn video: registering upload');
+    const registerRes = await axios.post(
+      `${this.apiBaseUrl}/assets?action=registerUpload`,
+      {
+        registerUploadRequest: {
+          owner: `urn:li:person:${accessToken.person_urn}`,
+          recipes: ['urn:li:digitalmediaRecipe:feedshare-video'],
+          serviceRelationships: [
+            { relationshipType: 'OWNER', identifier: 'urn:li:userGeneratedContent' },
+          ],
+          supportedUploadMechanism: ['SYNCHRONOUS_UPLOAD'],
+        },
+      },
+      { headers: authHeaders }
+    );
+
+    const uploadUrl = registerRes.data?.value?.uploadMechanism?.[
+      'com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'
+    ]?.uploadUrl;
+    const assetUrn = registerRes.data?.value?.asset;
+
+    if (!uploadUrl || !assetUrn) {
+      throw new Error('Unexpected response from LinkedIn asset registration for video');
+    }
+
+    // Step 2: Upload binary
+    this.fastify.log.info(`LinkedIn video: uploading binary (${videoBuffer.length} bytes)`);
+    await axios.put(uploadUrl, videoBuffer, {
+      headers: {
+        Authorization: `Bearer ${accessToken.access_token}`,
+        'Content-Type': videoType,
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 120000,
+    });
+
+    this.fastify.log.info(`LinkedIn video: upload complete, asset=${assetUrn}`);
+    return assetUrn; // e.g. urn:li:digitalmediaAsset:...
+  }
+
   // Refresh token
   async refreshAccessToken(refreshToken: string): Promise<any> {
     try {
@@ -286,6 +351,48 @@ export default class LinkedInService {
       }
 
       const mediaItems = [];
+
+      // Handle video — upload asset then post with VIDEO category
+      if (content.video?.buffer) {
+        try {
+          const assetUrn = await this.uploadVideoToLinkedIn(
+            accessToken,
+            content.video.buffer,
+            content.video.type || 'video/mp4',
+          );
+
+          // Ensure personUrn is normalised before building the post
+          const personUrn = (accessToken.person_urn || '').replace(/^urn:li:person:/, '');
+
+          const videoPostPayload = {
+            author: `urn:li:person:${personUrn}`,
+            lifecycleState: 'PUBLISHED',
+            specificContent: {
+              'com.linkedin.ugc.ShareContent': {
+                shareCommentary: { text: content.text },
+                shareMediaCategory: 'VIDEO',
+                media: [{ status: 'READY', media: assetUrn }],
+              },
+            },
+            visibility: {
+              'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC',
+            },
+          };
+
+          const videoPostRes = await axios.post(`${this.apiBaseUrl}/ugcPosts`, videoPostPayload, {
+            headers: {
+              Authorization: `Bearer ${accessToken.access_token}`,
+              'Content-Type': 'application/json',
+              'X-Restli-Protocol-Version': '2.0.0',
+            },
+            timeout: 15000,
+          });
+          return videoPostRes.data;
+        } catch (videoError: any) {
+          this.fastify?.log?.error?.('Error uploading video to LinkedIn:', videoError.message);
+          throw new Error(`Failed to upload video: ${videoError.message}`);
+        }
+      }
 
       // Handle image — uses /v2/assets (works with w_member_social scope)
       if (content.image?.buffer) {

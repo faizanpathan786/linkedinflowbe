@@ -3,13 +3,14 @@ import { Pool } from 'pg';
 import { auth } from '../auth';
 import LinkedInService from '../services/linkedin.service';
 import { sendPostPublishedEmail } from '../lib/email';
+import { downloadVideoFromUrl, uploadVideoToStorage, downloadVideoFromStorage, deleteVideoFromStorage, getVideoPublicUrl } from '../lib/supabase';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-type PostType = 'text' | 'image' | 'link';
+type PostType = 'text' | 'image' | 'link' | 'video';
 type PostStatus = 'draft' | 'scheduled' | 'published' | 'failed';
 
 interface CreatePostBody {
@@ -17,9 +18,12 @@ interface CreatePostBody {
   post_type?: PostType;
   link_url?: string;
   publish_now?: boolean;
-  scheduled_at?: string; // ISO 8601 datetime string — if set and in the future, post is scheduled
+  scheduled_at?: string;
   image_base64?: string;
   image_type?: string;
+  video_url?: string;    // public HTTP URL — backend downloads and stores in Supabase
+  video_base64?: string; // base64-encoded video — sent directly from browser file picker
+  video_type?: string;   // e.g. 'video/mp4'
 }
 
 interface PostParams {
@@ -28,6 +32,18 @@ interface PostParams {
 
 export default async function postsRoutes(fastify: FastifyInstance) {
   const linkedinService = new LinkedInService(fastify);
+
+  function addMediaPreviewFields(post: any) {
+    const hasImage = !!post.image_base64;
+    const hasVideo = !!post.video_storage_path;
+
+    return {
+      ...post,
+      has_image: hasImage,
+      has_video: hasVideo,
+      video_url: hasVideo ? getVideoPublicUrl(post.video_storage_path) : null,
+    };
+  }
 
   // ── Shared helper ──────────────────────────────────────────────────────────
   // Fetches the user's LinkedIn token, validates it, and publishes via the
@@ -39,6 +55,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
       link_url?: string | null;
       image_base64?: string;
       image_type?: string;
+      video_storage_path?: string;
     }
   ): Promise<string | null> {
     const client = await pool.connect();
@@ -51,7 +68,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
       if (tokenResult.rows.length === 0) {
         const err: any = new Error('Please connect your LinkedIn account first');
         err.statusCode = 400;
-        err.code = 'LINKEDIN_NOT_CONNECTED';
+        err.code = 'LINKEDIN_NOT_CONNECTED'; 
         throw err;
       }
 
@@ -71,10 +88,17 @@ export default async function postsRoutes(fastify: FastifyInstance) {
           }
         : undefined;
 
+      let videoPayload: { buffer: Buffer; type: string } | undefined;
+      if (postContent.video_storage_path) {
+        const { buffer, contentType } = await downloadVideoFromStorage(postContent.video_storage_path);
+        videoPayload = { buffer, type: contentType };
+      }
+
       const linkedinResponse = await linkedinService.createUnifiedPost(tokenData, {
         text: postContent.content,
         linkUrl: postContent.link_url ?? undefined,
         image: imagePayload,
+        video: videoPayload,
       });
 
       return linkedinResponse?.id || null;
@@ -105,36 +129,65 @@ export default async function postsRoutes(fastify: FastifyInstance) {
   }
 
   // POST /posts — create (and optionally publish) a post
+  // Accepts both JSON and multipart/form-data (for video file uploads)
   fastify.post(
     '/posts',
-    {
-      schema: {
-        body: {
-          type: 'object',
-          required: ['content'],
-          properties: {
-            content: { type: 'string', minLength: 1 },
-            post_type: { type: 'string', enum: ['text', 'image', 'link'], default: 'text' },
-            link_url: { type: 'string' },
-            publish_now: { type: 'boolean', default: false },
-            scheduled_at: { type: 'string', format: 'date-time' },
-            image_base64: { type: 'string' },
-            image_type: { type: 'string' },
-          },
-        },
-      },
-    },
     async (
       request: FastifyRequest<{ Body: CreatePostBody }>,
       reply: FastifyReply
     ) => {
-      const session = await auth.api.getSession({ headers: request.headers as any });
-      if (!session) {
-        return reply.status(401).send({ error: 'Unauthorized' });
-      }
+      let session: any;
+      try {
+        session = await auth.api.getSession({ headers: request.headers as any });
+      } catch { /* ignore */ }
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
 
       const userId = session.user.id;
-      const { content, post_type = 'text', link_url, publish_now = false, scheduled_at, image_base64, image_type } = request.body;
+
+      // ── Parse body: multipart (video file upload) OR JSON ──────────────────
+      let parsedBody: CreatePostBody = {} as CreatePostBody;
+
+      if (request.isMultipart()) {
+        const fields: Record<string, any> = {};
+        let imageBuffer: Buffer | null = null;
+        let imageMime = 'image/jpeg';
+        let videoBuffer: Buffer | null = null;
+        let videoMime = 'video/mp4';
+
+        for await (const part of (request as any).parts()) {
+          if (part.type === 'file' && part.fieldname === 'image') {
+            imageBuffer = await part.toBuffer();
+            imageMime = part.mimetype || 'image/jpeg';
+          } else if (part.type === 'file' && part.fieldname === 'video') {
+            videoBuffer = await part.toBuffer();
+            videoMime = part.mimetype || 'video/mp4';
+          } else {
+            fields[part.fieldname] = part.value;
+          }
+        }
+
+        parsedBody = {
+          content: fields.content,
+          post_type: fields.post_type || 'video',
+          link_url: fields.link_url,
+          publish_now: fields.publish_now === 'true' || fields.publish_now === true,
+          scheduled_at: fields.scheduled_at,
+          image_base64: imageBuffer ? imageBuffer.toString('base64') : undefined,
+          image_type: imageMime,
+          video_base64: videoBuffer ? videoBuffer.toString('base64') : undefined,
+          video_type: videoMime,
+        };
+      } else {
+        parsedBody = request.body || ({} as CreatePostBody);
+      }
+
+      const {
+        content, post_type = 'text', link_url, publish_now = false,
+        scheduled_at, image_base64, image_type,
+        video_url, video_base64, video_type,
+      } = parsedBody;
+
+      if (!content) return reply.status(400).send({ error: 'content is required' });
 
       // scheduled_at takes priority over publish_now
       const scheduledDate = scheduled_at ? new Date(scheduled_at) : null;
@@ -154,6 +207,32 @@ export default async function postsRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // Handle video — either base64 from browser file picker or a public URL
+      let videoStoragePath: string | null = null;
+      if (video_base64) {
+        // Browser sent the file as base64 (file picker flow)
+        try {
+          const buffer = Buffer.from(video_base64, 'base64');
+          const ct = video_type || 'video/mp4';
+          const { storagePath } = await uploadVideoToStorage(buffer, ct, userId);
+          videoStoragePath = storagePath;
+          fastify.log.info(`Video (base64) stored at: ${storagePath}`);
+        } catch (err: any) {
+          return reply.status(400).send({ error: 'Failed to upload video', message: err.message });
+        }
+      } else if (video_url) {
+        // Public HTTP URL — download then store
+        try {
+          fastify.log.info(`Downloading video from URL: ${video_url}`);
+          const { buffer, contentType } = await downloadVideoFromUrl(video_url);
+          const { storagePath } = await uploadVideoToStorage(buffer, contentType, userId);
+          videoStoragePath = storagePath;
+          fastify.log.info(`Video (url) stored at: ${storagePath}`);
+        } catch (err: any) {
+          return reply.status(400).send({ error: 'Failed to process video', message: err.message });
+        }
+      }
+
       const client = await pool.connect();
       try {
         let linkedin_post_id: string | null = null;
@@ -161,18 +240,21 @@ export default async function postsRoutes(fastify: FastifyInstance) {
 
         if (publish_now) {
           try {
-            fastify.log.info({
-              has_image_base64: !!image_base64,
-              image_base64_length: image_base64?.length,
-              image_type,
-              post_type,
-            }, 'POST /posts publish payload');
+            fastify.log.info({ post_type, has_video: !!videoStoragePath, has_image: !!image_base64 }, 'POST /posts publish payload');
 
             linkedin_post_id = await publishPostToLinkedIn(userId, {
               content, link_url, image_base64, image_type,
+              video_storage_path: videoStoragePath ?? undefined,
             });
             status = 'published';
-            notifyPublished(userId, content, new Date()); // fire-and-forget
+            // Clean up video from storage after publishing
+            if (videoStoragePath) {
+              deleteVideoFromStorage(videoStoragePath).catch((e) =>
+                fastify.log.error(`Failed to delete video from storage: ${e.message}`)
+              );
+              videoStoragePath = null;
+            }
+            notifyPublished(userId, content, new Date());
           } catch (err: any) {
             fastify.log.error('LinkedIn publish error:', err.message);
             await client.query(
@@ -188,15 +270,13 @@ export default async function postsRoutes(fastify: FastifyInstance) {
           }
         }
 
-        // Store image data for draft/scheduled posts so PATCH /publish can use it later.
-        // For already-published posts the image was consumed; no need to persist it.
         const storeImage = status !== 'published';
 
         const result = await client.query(
           `INSERT INTO public.posts
-             (user_id, content, post_type, link_url, linkedin_post_id, status, scheduled_at, published_at, image_base64, image_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           RETURNING id, user_id, content, post_type, link_url, linkedin_post_id, status, scheduled_at, published_at, image_type, created_at, updated_at`,
+             (user_id, content, post_type, link_url, linkedin_post_id, status, scheduled_at, published_at, image_base64, image_type, video_storage_path)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           RETURNING id, user_id, content, post_type, link_url, linkedin_post_id, status, scheduled_at, published_at, image_type, video_storage_path, created_at, updated_at`,
           [
             userId,
             content,
@@ -208,12 +288,13 @@ export default async function postsRoutes(fastify: FastifyInstance) {
             status === 'published' ? new Date() : null,
             storeImage ? (image_base64 || null) : null,
             storeImage ? (image_type || null) : null,
+            videoStoragePath,
           ]
         );
 
         return reply.status(201).send({
           success: true,
-          post: result.rows[0], // image_base64 excluded from RETURNING
+          post: addMediaPreviewFields(result.rows[0]),
         });
       } finally {
         client.release();
@@ -362,6 +443,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
             link_url: post.link_url,
             image_base64: post.image_base64 ?? undefined,
             image_type: post.image_type ?? undefined,
+            video_storage_path: post.video_storage_path ?? undefined,
           });
         } catch (err: any) {
           fastify.log.error('LinkedIn publish error on PATCH /publish:', err.message);
@@ -383,11 +465,17 @@ export default async function postsRoutes(fastify: FastifyInstance) {
         const updated = await client.query(
           `UPDATE public.posts
            SET status = 'published', linkedin_post_id = $1, published_at = NOW(), updated_at = NOW(),
-               image_base64 = NULL, image_type = NULL
+               image_base64 = NULL, image_type = NULL, video_storage_path = NULL
            WHERE id = $2
            RETURNING id, user_id, content, post_type, link_url, linkedin_post_id, status, scheduled_at, published_at, created_at, updated_at`,
           [linkedin_post_id, id]
         );
+
+        if (post.video_storage_path) {
+          deleteVideoFromStorage(post.video_storage_path).catch((e) =>
+            fastify.log.error(`Failed to delete video from storage: ${e.message}`)
+          );
+        }
 
         notifyPublished(userId, post.content, new Date()); // fire-and-forget
 
@@ -413,11 +501,11 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     try {
       const result = await client.query(
         `SELECT id, user_id, content, post_type, link_url, linkedin_post_id, status,
-                scheduled_at, published_at, image_type, created_at, updated_at
+                scheduled_at, published_at, image_type, image_base64, video_storage_path, created_at, updated_at
          FROM public.posts WHERE user_id = $1 ORDER BY created_at DESC`,
         [session.user.id]
       );
-      return reply.send({ posts: result.rows });
+      return reply.send({ posts: result.rows.map(addMediaPreviewFields) });
     } finally {
       client.release();
     }
@@ -443,7 +531,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: 'Post not found' });
         }
 
-        return reply.send({ post: result.rows[0] });
+        return reply.send({ post: addMediaPreviewFields(result.rows[0]) });
       } finally {
         client.release();
       }
@@ -576,6 +664,90 @@ export default async function postsRoutes(fastify: FastifyInstance) {
         });
       } finally {
         client.release();
+      }
+    }
+  );
+
+  // POST /posts/upload-video — upload a local video file to Supabase Storage
+  // Frontend sends { video_base64, video_type, filename } and gets back a public URL.
+  // The returned video_url can then be used in POST /posts as video_url.
+  fastify.post(
+    '/posts/upload-video',
+    async (
+      request: FastifyRequest<{ Body: { video_base64: string; video_type?: string; filename?: string } }>,
+      reply: FastifyReply
+    ) => {
+      let session: any;
+      try {
+        session = await auth.api.getSession({ headers: request.headers as any });
+      } catch {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+      let video_base64: string | undefined;
+      let video_type: string | undefined;
+      let filename: string | undefined;
+
+      if (request.isMultipart()) {
+        const fields: Record<string, any> = {};
+        let videoBuffer: Buffer | null = null;
+
+        for await (const part of (request as any).parts()) {
+          if (part.type === 'file' && part.fieldname === 'video') {
+            videoBuffer = await part.toBuffer();
+            video_type = part.mimetype || 'video/mp4';
+            filename = part.filename;
+          } else {
+            fields[part.fieldname] = part.value;
+          }
+        }
+
+        if (videoBuffer) {
+          video_base64 = videoBuffer.toString('base64');
+        } else {
+          video_base64 = fields.video_base64;
+          video_type = video_type || fields.video_type;
+          filename = filename || fields.filename;
+        }
+      } else {
+        const body = request.body || ({} as any);
+        video_base64 = body.video_base64;
+        video_type = body.video_type;
+        filename = body.filename;
+      }
+
+      if (!video_base64) {
+        return reply.status(400).send({ error: 'video_base64 is required' });
+      }
+
+      // Validate it looks like a video
+      const ct = video_type || 'video/mp4';
+      if (!ct.startsWith('video/')) {
+        return reply.status(400).send({ error: 'Only video files are supported' });
+      }
+
+      // Size guard — base64 string length * 0.75 ≈ bytes
+      const estimatedBytes = Math.round(video_base64.length * 0.75);
+      const MAX_BYTES = 200 * 1024 * 1024; // 200 MB
+      if (estimatedBytes > MAX_BYTES) {
+        return reply.status(400).send({ error: 'Video exceeds 200 MB limit' });
+      }
+
+      try {
+        const buffer = Buffer.from(video_base64, 'base64');
+        const { storagePath, publicUrl } = await uploadVideoToStorage(buffer, ct, session.user.id);
+        fastify.log.info(`Video uploaded: ${storagePath} (${buffer.length} bytes)`);
+        return reply.status(201).send({
+          success: true,
+          video_url: publicUrl,
+          storage_path: storagePath,
+          size_bytes: buffer.length,
+          filename: filename || storagePath.split('/').pop(),
+        });
+      } catch (err: any) {
+        fastify.log.error('Video upload error:', err.message);
+        return reply.status(500).send({ error: 'Failed to upload video', message: err.message });
       }
     }
   );

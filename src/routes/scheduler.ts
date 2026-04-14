@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Pool } from 'pg';
 import LinkedInService from '../services/linkedin.service';
 import { sendPostPublishedEmail } from '../lib/email';
+import { downloadVideoFromStorage, deleteVideoFromStorage } from '../lib/supabase';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -32,10 +33,13 @@ export default async function schedulerRoutes(fastify: FastifyInstance) {
         link_url: string | null;
         image_base64: string | null;
         image_type: string | null;
+        video_storage_path: string | null;
       }>(
-        `SELECT id, user_id, content, link_url, image_base64, image_type
+        `SELECT id, user_id, content, link_url, image_base64, image_type, video_storage_path
          FROM public.posts
-         WHERE status = 'scheduled' AND scheduled_at <= NOW()`
+         WHERE status = 'scheduled' AND scheduled_at <= NOW()
+         ORDER BY scheduled_at ASC
+         LIMIT 30`
       );
 
       if (duePosts.length === 0) {
@@ -91,10 +95,27 @@ export default async function schedulerRoutes(fastify: FastifyInstance) {
                 ? { buffer: Buffer.from(post.image_base64, 'base64'), type: post.image_type || 'image/jpeg' }
                 : undefined;
 
+              let videoPayload: { buffer: Buffer; type: string } | undefined;
+              if (post.video_storage_path) {
+                try {
+                  const { buffer, contentType } = await downloadVideoFromStorage(post.video_storage_path);
+                  videoPayload = { buffer, type: contentType };
+                } catch (videoErr: any) {
+                  fastify.log.error(`Scheduler: failed to download video for post ${post.id}: ${videoErr.message}`);
+                  await client.query(
+                    `UPDATE public.posts SET status = 'failed', updated_at = NOW() WHERE id = $1`,
+                    [post.id]
+                  );
+                  failed++;
+                  return;
+                }
+              }
+
               const linkedinResponse = await linkedinService.createUnifiedPost(tokenData, {
                 text: post.content,
                 linkUrl: post.link_url ?? undefined,
                 image: imagePayload,
+                video: videoPayload,
               });
 
               await client.query(
@@ -104,10 +125,18 @@ export default async function schedulerRoutes(fastify: FastifyInstance) {
                      published_at = NOW(),
                      updated_at = NOW(),
                      image_base64 = NULL,
-                     image_type = NULL
+                     image_type = NULL,
+                     video_storage_path = NULL
                  WHERE id = $2`,
                 [linkedinResponse?.id || null, post.id]
               );
+
+              // Clean up video from Supabase Storage after publishing
+              if (post.video_storage_path) {
+                deleteVideoFromStorage(post.video_storage_path).catch((e) =>
+                  fastify.log.error(`Scheduler: failed to delete video from storage for post ${post.id}: ${e.message}`)
+                );
+              }
 
               fastify.log.info(`Scheduler: post ${post.id} published successfully`);
               published++;

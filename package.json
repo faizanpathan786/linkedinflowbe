@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
-    "@browserbasehq/sdk": "^2.6.0",
+    "@browserbasehq/sdk": "^2.10.0",
     "@fast-csv/format": "^5.0.5",
     "@fastify/autoload": "^6.3.0",
     "@fastify/cors": "^10.0.1",

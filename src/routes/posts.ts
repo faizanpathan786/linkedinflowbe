@@ -148,30 +148,41 @@ export default async function postsRoutes(fastify: FastifyInstance) {
       let parsedBody: CreatePostBody = {} as CreatePostBody;
 
       if (request.isMultipart()) {
-        const fields: Record<string, any> = {};
-        let imageBuffer: Buffer | null = null;
-        let imageMime = 'image/jpeg';
-        let videoBuffer: Buffer | null = null;
-        let videoMime = 'video/mp4';
+        const body = request.body as Record<string, any>;
 
-        for await (const part of (request as any).parts()) {
-          if (part.type === 'file' && part.fieldname === 'image') {
-            imageBuffer = await part.toBuffer();
-            imageMime = part.mimetype || 'image/jpeg';
-          } else if (part.type === 'file' && part.fieldname === 'video') {
-            videoBuffer = await part.toBuffer();
-            videoMime = part.mimetype || 'video/mp4';
-          } else {
-            fields[part.fieldname] = part.value;
+        const getField = (f: any): string | undefined =>
+          f == null ? undefined : typeof f === 'object' && 'value' in f ? f.value : f;
+
+        const imageField = body.image;
+        const videoField = body.video;
+        let imageBuffer: Buffer | null = null;
+        let imageMime = getField(body.image_type) || 'image/jpeg';
+        let videoBuffer: Buffer | null = null;
+        let videoMime = getField(body.video_type) || 'video/mp4';
+
+        if (imageField) {
+          if (typeof imageField.toBuffer === 'function') {
+            imageBuffer = await imageField.toBuffer();
+            imageMime = imageField.mimetype || imageMime;
+          } else if (Buffer.isBuffer(imageField)) {
+            imageBuffer = imageField;
+          }
+        }
+        if (videoField) {
+          if (typeof videoField.toBuffer === 'function') {
+            videoBuffer = await videoField.toBuffer();
+            videoMime = videoField.mimetype || videoMime;
+          } else if (Buffer.isBuffer(videoField)) {
+            videoBuffer = videoField;
           }
         }
 
         parsedBody = {
-          content: fields.content,
-          post_type: fields.post_type || 'video',
-          link_url: fields.link_url,
-          publish_now: fields.publish_now === 'true' || fields.publish_now === true,
-          scheduled_at: fields.scheduled_at,
+          content: (getField(body.content) ?? '') as string,
+          post_type: (getField(body.post_type) || 'text') as any,
+          link_url: getField(body.link_url),
+          publish_now: getField(body.publish_now) === 'true' || body.publish_now === true,
+          scheduled_at: getField(body.scheduled_at),
           image_base64: imageBuffer ? imageBuffer.toString('base64') : undefined,
           image_type: imageMime,
           video_base64: videoBuffer ? videoBuffer.toString('base64') : undefined,
@@ -690,25 +701,27 @@ export default async function postsRoutes(fastify: FastifyInstance) {
       let filename: string | undefined;
 
       if (request.isMultipart()) {
-        const fields: Record<string, any> = {};
-        let videoBuffer: Buffer | null = null;
+        const body = request.body as Record<string, any>;
+        const getField = (f: any): string | undefined =>
+          f == null ? undefined : typeof f === 'object' && 'value' in f ? f.value : f;
 
-        for await (const part of (request as any).parts()) {
-          if (part.type === 'file' && part.fieldname === 'video') {
-            videoBuffer = await part.toBuffer();
-            video_type = part.mimetype || 'video/mp4';
-            filename = part.filename;
-          } else {
-            fields[part.fieldname] = part.value;
+        const videoField = body.video;
+        if (videoField) {
+          let videoBuffer: Buffer | null = null;
+          if (typeof videoField.toBuffer === 'function') {
+            videoBuffer = await videoField.toBuffer();
+            video_type = videoField.mimetype || 'video/mp4';
+            filename = videoField.filename;
+          } else if (Buffer.isBuffer(videoField)) {
+            videoBuffer = videoField;
+            video_type = getField(body.video_type) || 'video/mp4';
+            filename = getField(body.filename);
           }
-        }
-
-        if (videoBuffer) {
-          video_base64 = videoBuffer.toString('base64');
+          if (videoBuffer) video_base64 = videoBuffer.toString('base64');
         } else {
-          video_base64 = fields.video_base64;
-          video_type = video_type || fields.video_type;
-          filename = filename || fields.filename;
+          video_base64 = getField(body.video_base64);
+          video_type = getField(body.video_type);
+          filename = getField(body.filename);
         }
       } else {
         const body = request.body || ({} as any);

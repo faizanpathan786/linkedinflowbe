@@ -33,6 +33,7 @@ server.register(cors, {
 
 server.register(multipart, {
   limits: { fileSize: 250 * 1024 * 1024 }, // 250 MB
+  attachFieldsToBody: true,
 });
 
 // Ensure Supabase Storage bucket exists for videos
@@ -56,18 +57,18 @@ server.post('/posts/import', async (request: FastifyRequest, reply: FastifyReply
   let file: string | undefined;
   let filename: string | undefined;
 
+  const body = request.body as any;
   if ((request as any).isMultipart?.()) {
-    for await (const part of (request as any).parts()) {
-      if (part.type === 'file' && part.fieldname === 'file') {
-        const buffer = await part.toBuffer();
-        file = buffer.toString('base64');
-        filename = part.filename;
-      } else if (part.fieldname === 'filename') {
-        filename = String(part.value);
-      }
+    const fileField = body?.file;
+    if (fileField && typeof fileField.toBuffer === 'function') {
+      const buffer = await fileField.toBuffer();
+      file = buffer.toString('base64');
+      filename = fileField.filename;
+    } else {
+      file = fileField?.value ?? fileField;
+      filename = body?.filename?.value ?? body?.filename;
     }
   } else {
-    const body = request.body as any;
     file = body?.file;
     filename = body?.filename;
   }

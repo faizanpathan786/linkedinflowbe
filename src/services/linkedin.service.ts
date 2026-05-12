@@ -16,7 +16,7 @@ export default class LinkedInService {
     this.clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
     this.redirectUri = process.env.LINKEDIN_REDIRECT_URI;
     this.apiBaseUrl = "https://api.linkedin.com/v2";
-    this.scope = "openid profile email w_member_social"
+    this.scope = "openid profile email w_member_social r_member_social"
 
     // Set default axios timeouts for LinkedIn API requests
     this.axiosConfig = {
@@ -313,6 +313,29 @@ export default class LinkedInService {
 
     this.fastify.log.info(`LinkedIn video: upload complete, asset=${assetUrn}`);
     return assetUrn; // e.g. urn:li:digitalmediaAsset:...
+  }
+
+  // Fetch social action stats (likes, comments, shares) for a published post.
+  // Requires r_member_social scope. shareUrn is the linkedin_post_id stored in the DB
+  // e.g. "urn:li:ugcPost:7234567890123456789"
+  async getPostAnalytics(accessToken: string, shareUrn: string): Promise<any> {
+    try {
+      const encodedUrn = encodeURIComponent(shareUrn);
+      const response = await axios.get(
+        `${this.apiBaseUrl}/socialActions/${encodedUrn}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'X-Restli-Protocol-Version': '2.0.0',
+          },
+          timeout: 10000,
+        }
+      );
+      return response.data;
+    } catch (err: any) {
+      this.fastify?.log?.error?.('Error fetching post analytics:', err.response?.data || err.message);
+      throw new Error(`Failed to fetch post analytics: ${err.response?.data?.message || err.message}`);
+    }
   }
 
   // Refresh token

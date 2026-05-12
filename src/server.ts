@@ -9,8 +9,9 @@ import postsRoutes from './routes/posts';
 import authRoutes from './routes/auth';
 import schedulerRoutes from './routes/scheduler';
 import aiRoutes from './routes/ai';
+import automationRoutes from './routes/automation';
 import { auth } from './auth';
-import { downloadVideoFromUrl, uploadVideoToStorage, ensureVideoBucket } from './lib/supabase';
+import { downloadVideoFromUrl, uploadVideoToStorage, ensureVideoBucket, getVideoPublicUrl } from './lib/supabase';
 
 const importPool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -109,14 +110,16 @@ server.post('/posts/import', async (request: FastifyRequest, reply: FastifyReply
       const content = String(row.content || '').trim();
       if (!content) { errors.push({ row: rowNum, message: 'content is required' }); continue; }
 
-      const validTypes = ['text', 'image', 'link', 'video'];
-      const post_type = validTypes.includes(row.post_type) ? row.post_type : 'text';
       const link_url = String(row.link_url || '').trim() || null;
       const image_url = String(row.image_url || '').trim() || null;
       const video_url = String(row.video_url || '').trim() || null;
       const publish_now = ['true', 'yes', '1', true].includes(
         typeof row.publish_now === 'string' ? row.publish_now.toLowerCase().trim() : row.publish_now
       );
+
+      // Infer post_type from media presence (video > image > link > CSV value)
+      const csvPostType = ['text', 'image', 'link', 'video'].includes(row.post_type) ? row.post_type : 'text';
+      const post_type = video_url ? 'video' : image_url ? 'image' : link_url ? 'link' : csvPostType;
 
       // Fetch image from URL and convert to base64 if provided
       let image_base64: string | null = null;
@@ -127,7 +130,8 @@ server.post('/posts/import', async (request: FastifyRequest, reply: FastifyReply
           image_base64 = Buffer.from(imgRes.data).toString('base64');
           image_type = (imgRes.headers['content-type'] as string) || 'image/jpeg';
         } catch (imgErr: any) {
-          warnings.push({ row: rowNum, message: `Image skipped: ${imgErr.message}` });
+          errors.push({ row: rowNum, message: `Failed to download image: ${imgErr.message}` });
+          continue;
         }
       }
 
@@ -139,7 +143,8 @@ server.post('/posts/import', async (request: FastifyRequest, reply: FastifyReply
           const { storagePath } = await uploadVideoToStorage(buffer, contentType, userId);
           video_storage_path = storagePath;
         } catch (vidErr: any) {
-          warnings.push({ row: rowNum, message: `Video skipped: ${vidErr.message}` });
+          errors.push({ row: rowNum, message: `Failed to download video: ${vidErr.message}` });
+          continue;
         }
       }
 
@@ -169,7 +174,14 @@ server.post('/posts/import', async (request: FastifyRequest, reply: FastifyReply
            RETURNING id, content, post_type, link_url, status, scheduled_at, image_type, video_storage_path, created_at`,
           [userId, content, post_type, link_url, status, scheduledDate, image_base64, image_type, video_storage_path]
         );
-        created.push({ row: rowNum, ...result.rows[0] });
+        const row0 = result.rows[0];
+        created.push({
+          row: rowNum,
+          ...row0,
+          has_image: !!image_base64,
+          has_video: !!video_storage_path,
+          video_url: video_storage_path ? getVideoPublicUrl(video_storage_path) : null,
+        });
       } catch (err: any) {
         errors.push({ row: rowNum, message: err.message });
       }
@@ -195,5 +207,6 @@ server.register(postsRoutes);
 server.register(authRoutes);
 server.register(schedulerRoutes);
 server.register(aiRoutes);
+server.register(automationRoutes);
 
 export default server;

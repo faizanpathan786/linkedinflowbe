@@ -48,6 +48,7 @@
     "date-fns": "^4.1.0",
     "fastify": "^5.2.0",
     "fs-extra": "^11.3.2",
+    "groq-sdk": "^1.2.0",
     "json2csv": "^6.0.0-alpha.2",
     "node-cron": "^4.2.1",
     "node-fetch": "^3.3.2",

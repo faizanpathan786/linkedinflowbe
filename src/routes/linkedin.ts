@@ -12,7 +12,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
-const LINKEDIN_SCOPES = 'openid profile email w_member_social';
+const LINKEDIN_SCOPES = 'openid profile email w_member_social r_member_social';
 
 // Function to save LinkedIn token to database using plain SQL
 async function saveLinkedInToken(
@@ -356,6 +356,70 @@ export default async function linkedinRoutes(fastify: FastifyInstance) {
           success: false,
           error: 'DATABASE_ERROR'
         });
+      }
+    }
+  );
+
+  // Get analytics for a published post
+  // GET /linkedin/posts/:postId/analytics
+  // postId is the internal DB post ID; looks up linkedin_post_id and fetches social action stats
+  fastify.get(
+    '/linkedin/posts/:postId/analytics',
+    async (request: FastifyRequest<{ Params: { postId: string } }>, reply: FastifyReply) => {
+      const { postId } = request.params;
+      const client = await pool.connect();
+      try {
+        // Fetch post — need linkedin_post_id and user_id
+        const postResult = await client.query(
+          `SELECT id, user_id, linkedin_post_id, status FROM public.posts WHERE id = $1`,
+          [postId]
+        );
+
+        if (postResult.rows.length === 0) {
+          return reply.status(404).send({ message: 'Post not found', success: false });
+        }
+
+        const post = postResult.rows[0];
+
+        if (!post.linkedin_post_id) {
+          return reply.status(400).send({
+            message: 'Post has not been published to LinkedIn yet',
+            success: false,
+          });
+        }
+
+        const tokenData = await getLinkedInToken(post.user_id);
+        if (!tokenData) {
+          return reply.status(404).send({
+            message: 'No LinkedIn token found for this user',
+            success: false,
+          });
+        }
+
+        const analytics = await linkedinService.getPostAnalytics(
+          tokenData.access_token,
+          post.linkedin_post_id
+        );
+
+        reply.send({
+          success: true,
+          data: {
+            post_id: postId,
+            linkedin_post_id: post.linkedin_post_id,
+            likes: analytics.likesSummary?.totalLikes ?? 0,
+            comments: analytics.commentsSummary?.totalFirstLevelComments ?? 0,
+            shares: analytics.sharesSummary?.shareCount ?? 0,
+            raw: analytics,
+          },
+        });
+      } catch (error: any) {
+        console.error('Error fetching LinkedIn analytics:', error.message);
+        reply.status(500).send({
+          message: error.message || 'Error fetching LinkedIn analytics',
+          success: false,
+        });
+      } finally {
+        client.release();
       }
     }
   );

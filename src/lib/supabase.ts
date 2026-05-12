@@ -22,14 +22,27 @@ export async function ensureVideoBucket(): Promise<void> {
 export async function downloadVideoFromUrl(
   url: string
 ): Promise<{ buffer: Buffer; contentType: string; sizeBytes: number }> {
-  const res = await axios.get(url, {
-    responseType: 'arraybuffer',
-    timeout: 60000,
-    maxContentLength: 500 * 1024 * 1024, // 500 MB max
-  });
-  const buffer = Buffer.from(res.data);
-  const contentType = (res.headers['content-type'] as string) || 'video/mp4';
-  return { buffer, contentType, sizeBytes: buffer.length };
+  try {
+    const res = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 60000,
+      maxContentLength: 500 * 1024 * 1024, // 500 MB max
+    });
+    const buffer = Buffer.from(res.data);
+    const contentType = (res.headers['content-type'] as string) || 'video/mp4';
+    return { buffer, contentType, sizeBytes: buffer.length };
+  } catch (err: any) {
+    if (err.response?.status === 404) {
+      throw new Error(`Video URL not found (404): ${url}`);
+    }
+    if (err.response?.status === 403) {
+      throw new Error(`Access denied to video URL (403): ${url}`);
+    }
+    if (err.code === 'ECONNABORTED') {
+      throw new Error(`Download timeout: video URL took too long to download: ${url}`);
+    }
+    throw new Error(`Failed to download video from ${url}: ${err.message}`);
+  }
 }
 
 // Upload a video buffer to Supabase Storage and return the storage path + public URL

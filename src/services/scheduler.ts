@@ -4,6 +4,8 @@ import { Pool } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import LinkedInService from './linkedin.service';
 import { downloadVideoFromStorage, deleteVideoFromStorage } from '../lib/supabase';
+import { notifyPostSuccess, notifyPostFailure, mergePrefs } from '../lib/notifications';
+import { sendWeeklyDigestEmail } from '../lib/email';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -236,6 +238,10 @@ export function startScheduler(fastify: FastifyInstance) {
             );
           }
 
+          notifyPostSuccess(pool, post.user_id, post.content, new Date()).catch((e: any) =>
+            fastify.log.error(`Scheduler: failed to send success email for post ${post.id}: ${e.message}`)
+          );
+
           fastify.log.info(`Scheduler: post ${post.id} published successfully`);
         } catch (err: any) {
           const durationMs = Date.now() - startTime;
@@ -269,6 +275,10 @@ export function startScheduler(fastify: FastifyInstance) {
             response_body: err?.response?.data,
             duration_ms: durationMs,
           });
+
+          notifyPostFailure(pool, post.user_id, post.content, errorMessage).catch((e: any) =>
+            fastify.log.error(`Scheduler: failed to send failure email for post ${post.id}: ${e.message}`)
+          );
         }
       }
     } catch (err: any) {
@@ -277,6 +287,60 @@ export function startScheduler(fastify: FastifyInstance) {
       client.release();
     }
   });
+
+  // Every Monday at 08:00 UTC — send weekly digest to opted-in users
+  cron.schedule('0 8 * * 1', async () => {
+    fastify.log.info('[WEEKLY DIGEST] Running weekly report job');
+    const client = await pool.connect();
+    try {
+      const weekStart = new Date();
+      weekStart.setUTCDate(weekStart.getUTCDate() - 7);
+      weekStart.setUTCHours(0, 0, 0, 0);
+
+      const { rows: users } = await client.query(
+        `SELECT id, name, email, notification_preferences
+         FROM public."user"
+         WHERE notification_preferences IS NOT NULL`
+      );
+
+      for (const user of users) {
+        try {
+          const prefs = mergePrefs(user.notification_preferences);
+          if (!prefs.emailNotifications || !prefs.weeklyReport) continue;
+
+          const { rows: stats } = await client.query(
+            `SELECT
+               COUNT(*) FILTER (WHERE created_at >= $1)                        AS total,
+               COUNT(*) FILTER (WHERE status = 'published' AND published_at >= $1) AS published,
+               COUNT(*) FILTER (WHERE status = 'failed'    AND updated_at  >= $1) AS failed,
+               COUNT(*) FILTER (WHERE status = 'scheduled')                    AS scheduled
+             FROM public.posts
+             WHERE user_id = $2`,
+            [weekStart.toISOString(), user.id]
+          );
+
+          const s = stats[0];
+          const weekOf = weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+          await sendWeeklyDigestEmail(user.email, user.name, {
+            total: parseInt(s.total, 10),
+            published: parseInt(s.published, 10),
+            failed: parseInt(s.failed, 10),
+            scheduled: parseInt(s.scheduled, 10),
+            weekOf,
+          });
+
+          fastify.log.info(`[WEEKLY DIGEST] Sent to ${user.email}`);
+        } catch (err: any) {
+          fastify.log.error(`[WEEKLY DIGEST] Failed for user ${user.id}: ${err.message}`);
+        }
+      }
+    } catch (err: any) {
+      fastify.log.error(`[WEEKLY DIGEST] Job error: ${err.message}`);
+    } finally {
+      client.release();
+    }
+  }, { timezone: 'UTC' });
 
   fastify.log.info('Scheduler started — checking for scheduled posts every minute');
 }

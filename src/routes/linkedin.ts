@@ -12,7 +12,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
-const LINKEDIN_SCOPES = 'openid profile email w_member_social r_member_social';
+const LINKEDIN_SCOPES = 'openid profile email w_member_social';
 
 // Function to save LinkedIn token to database using plain SQL
 async function saveLinkedInToken(
@@ -119,20 +119,28 @@ async function getLinkedInToken(userId: string): Promise<any> {
 
 async function getLinkedInUserProfile(access_token: string) {
   try {
-    // /v2/userinfo is the correct endpoint for openid+profile scopes (OIDC)
-    // /v2/me requires the deprecated r_liteprofile scope and returns 403 with OIDC tokens
+    // /v2/userinfo is the correct OIDC endpoint for openid+profile scopes
     const response = await axios.get('https://api.linkedin.com/v2/userinfo', {
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-      },
+      headers: { Authorization: `Bearer ${access_token}` },
     });
-    // userinfo returns { sub, name, given_name, family_name, picture, email, locale }
-    // normalise to the shape the rest of this file expects: .id and .vanityName
     const data = response.data;
+
+    // Try to fetch the vanity name (URL slug) from /v2/me separately.
+    // /v2/userinfo has no vanityName field; /v2/me?projection=(id,vanityName) does.
+    let vanityName: string | null = null;
+    try {
+      const meResponse = await axios.get('https://api.linkedin.com/v2/me?projection=(id,vanityName)', {
+        headers: { Authorization: `Bearer ${access_token}` },
+      });
+      vanityName = meResponse.data?.vanityName ?? null;
+    } catch {
+      // vanityName is optional — leave null rather than storing the display name
+    }
+
     return {
       ...data,
-      id: data.sub,          // sub is the stable LinkedIn member ID
-      vanityName: data.name, // vanityName is not available via userinfo; use display name
+      id: data.sub,
+      vanityName,
     };
   } catch (error: any) {
     console.error('Error fetching LinkedIn profile:', {
@@ -237,6 +245,19 @@ export default async function linkedinRoutes(fastify: FastifyInstance) {
         }
 
         console.log('Processing LinkedIn OAuth for user:', userId);
+
+        // One-time cleanup: vanity_name was previously set to the display name (e.g. "Faizan Pathan").
+        // Clear any rows where it contains a space — those are not valid URL slugs.
+        {
+          const cleanupClient = await pool.connect();
+          try {
+            await cleanupClient.query(
+              `UPDATE public.linkedin_tokens SET vanity_name = NULL WHERE vanity_name LIKE '% %'`
+            );
+          } catch { /* non-fatal */ } finally {
+            cleanupClient.release();
+          }
+        }
 
         // Exchange code for access token
         const tokens = await linkedinService.getAccessToken(code);
@@ -420,6 +441,49 @@ export default async function linkedinRoutes(fastify: FastifyInstance) {
         });
       } finally {
         client.release();
+      }
+    }
+  );
+
+  // Get LinkedIn profile for a user
+  fastify.get(
+    '/linkedin/profile/:userId',
+    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+      const { userId } = request.params;
+
+      const tokenData = await getLinkedInToken(userId);
+      if (!tokenData) {
+        return reply.status(404).send({ success: false, message: 'Not connected' });
+      }
+
+      try {
+        // /v2/userinfo is the correct endpoint for OIDC tokens (openid profile email scopes).
+        // /v2/me with projection requires the deprecated r_liteprofile scope and returns 403/404.
+        const response = await axios.get('https://api.linkedin.com/v2/userinfo', {
+          headers: { Authorization: `Bearer ${tokenData.access_token}` },
+        });
+
+        const d = response.data;
+
+        return reply.send({
+          success: true,
+          data: {
+            firstName: d.given_name ?? null,
+            lastName: d.family_name ?? null,
+            headline: null, // not available via OIDC userinfo
+            pictureUrl: d.picture ?? null,
+            vanityName: tokenData.vanity_name ?? null,
+            personUrn: tokenData.person_urn ?? null,
+          },
+        });
+      } catch (error: any) {
+        const status = error.response?.status;
+        fastify.log.error({ status, data: error.response?.data }, 'LinkedIn /v2/userinfo error');
+
+        if (status === 401) {
+          return reply.status(401).send({ success: false, message: 'LinkedIn token expired — please reconnect' });
+        }
+        return reply.status(502).send({ success: false, message: 'Failed to fetch LinkedIn profile' });
       }
     }
   );

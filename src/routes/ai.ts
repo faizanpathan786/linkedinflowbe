@@ -27,47 +27,50 @@ interface GeneratePostBody {
   };
 }
 
-function buildSystemPrompt(brand_voice: GeneratePostBody['brand_voice'], style: string): string {
-  const tone = brand_voice?.tone ?? 'professional';
-  const styleNotes = brand_voice?.style ?? 'Short sentences. No buzzwords. Write like you talk.';
-  const examples = brand_voice?.examples ?? '';
-
-  return `You are a LinkedIn ghostwriter for B2B founders. You write in a direct, human voice — no fluff, no buzzwords, no "I'm excited to share".
-
-Rules:
-- Never start with "I'm excited", "Thrilled to", "In today's fast-paced"
-- Short sentences. One idea per line. White space is your friend.
-- End with a question or a clear call to action
-- The post should sound like the founder wrote it at 11pm after a good day
-- Maximum 1300 characters per variation
-
-Brand voice tone: ${tone}
-Style notes: ${styleNotes}
-${examples ? `Example posts from this founder:\n${examples}` : ''}
-
-Generate exactly 3 LinkedIn post variations based on the interview answers.
-Requested style emphasis: ${style}
-
-Return ONLY valid JSON in this exact format (no markdown, no explanation):
-{
-  "variations": [
-    { "type": "story", "hook": "first line of the post", "content": "full post text" },
-    { "type": "opinion", "hook": "first line of the post", "content": "full post text" },
-    { "type": "insight", "hook": "first line of the post", "content": "full post text" }
-  ]
-}`;
+function buildSystemPrompt(_brand_voice: GeneratePostBody['brand_voice'], _style: string): string {
+  return `You are a world-class LinkedIn ghostwriter for founders and operators. You write posts that feel real, earned, and specific — never generic, never corporate. Your posts get high engagement because they are honest, concrete, and make the reader feel something.`;
 }
 
-function buildUserPrompt(answers: GeneratePostBody['answers']): string {
-  return `Interview answers:
+function buildUserPrompt(
+  answers: GeneratePostBody['answers'],
+  style: string,
+  brand_voice: GeneratePostBody['brand_voice'],
+): string {
+  return `Write 3 LinkedIn post variations. Style: ${style}
+
+Style guide:
+- story: narrative arc (setup → conflict → resolution → lesson), drop the reader into the middle of the action
+- opinion: bold opening claim + 2-3 concrete reasons + debate-inviting close
+- insight: lead with the counterintuitive truth, then the breakdown
+
+${brand_voice?.tone ? `Tone: ${brand_voice.tone}` : ''}
+${brand_voice?.style ? `Voice notes: ${brand_voice.style}` : ''}
+${brand_voice?.examples ? `Example posts from this person:\n${brand_voice.examples}` : ''}
 
 What happened: ${answers.q1}
-Who it was for: ${answers.q2 ?? 'Not specified'}
-What was learned: ${answers.q3 ?? 'Not specified'}
-The uncomfortable truth: ${answers.q4 ?? 'Not specified'}
-What the reader should do: ${answers.q5 ?? 'Not specified'}
+Who it's for: ${answers.q2 || 'founders and professionals'}
+What the reader should do differently: ${answers.q5 || 'think differently about this topic'}
 
-Generate 3 LinkedIn post variations (story, opinion, insight) using the brand voice rules above.`;
+Use a DIFFERENT hook type for each variation:
+Variation 1 — open with a specific number, stat, or concrete detail
+Variation 2 — open with a counter-intuitive statement or confession
+Variation 3 — open with a tension-building question
+
+Format each variation as:
+[Hook — 1 sentence, max 15 words]
+[blank line]
+[Body — 3-5 short paragraphs, 1-3 sentences each, blank line between]
+[blank line]
+[Closing — 1 punchy takeaway or CTA]
+
+Hard rules:
+- Never start with "In today's", "I'm excited to share", "Thrilled to", "Game-changer", or "Leverage"
+- No buzzwords or jargon
+- First person, past tense for story / present tense for opinion & insight
+- Max 280 words per variation
+
+Return ONLY valid JSON — no markdown fences, no explanation, nothing else:
+{"variations":[{"type":"story","hook":"<hook sentence>","content":"<full post>"},{"type":"opinion","hook":"<hook sentence>","content":"<full post>"},{"type":"insight","hook":"<hook sentence>","content":"<full post>"}]}`;
 }
 
 interface GenerateCaptionBody {
@@ -101,14 +104,14 @@ export default async function aiRoutes(fastify: FastifyInstance) {
           model: 'llama-3.3-70b-versatile',
           messages: [
             { role: 'system', content: buildSystemPrompt(brand_voice, style) },
-            { role: 'user', content: buildUserPrompt(answers) },
+            { role: 'user', content: buildUserPrompt(answers, style, brand_voice) },
           ],
           temperature: 0.85,
           max_tokens: 2000,
         });
         raw = completion.choices[0]?.message?.content ?? '';
       } catch (err: any) {
-        fastify.log.error('AI generate error:', err.message);
+        fastify.log.error({ err: err.message, status: err.status, code: err.code }, 'AI generate error');
         if (err.message?.includes('timeout') || err.status === 408) {
           return reply.status(504).send({ error: 'Generation timed out — try again' });
         }
@@ -118,11 +121,15 @@ export default async function aiRoutes(fastify: FastifyInstance) {
       let parsed: { variations: Array<{ type: string; hook: string; content: string }> };
       try {
         const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        parsed = JSON.parse(clean);
-        if (!Array.isArray(parsed.variations) || parsed.variations.length === 0) throw new Error('empty');
-      } catch {
-        fastify.log.error({ raw }, 'Failed to parse AI response');
-        return reply.status(500).send({ error: 'Failed to parse AI response' });
+        // Escape literal control characters inside JSON string values
+        const sanitized = clean.replace(/"((?:[^"\\]|\\.)*)"/g, (match) =>
+          match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')
+        );
+        parsed = JSON.parse(sanitized);
+        if (!Array.isArray(parsed.variations) || parsed.variations.length === 0) throw new Error('empty variations array');
+      } catch (parseErr: any) {
+        fastify.log.error({ raw, parseErr: parseErr.message }, 'Failed to parse AI response');
+        return reply.status(500).send({ error: 'Failed to parse AI response', detail: parseErr.message, raw });
       }
 
       return reply.send({ variations: parsed.variations });

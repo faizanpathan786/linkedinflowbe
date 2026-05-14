@@ -10,6 +10,8 @@ import authRoutes from './routes/auth';
 import schedulerRoutes from './routes/scheduler';
 import aiRoutes from './routes/ai';
 import automationRoutes from './routes/automation';
+import contentRoutes from './routes/content';
+import notificationsRoutes from './routes/notifications';
 import { auth } from './auth';
 import { downloadVideoFromUrl, uploadVideoToStorage, ensureVideoBucket, getVideoPublicUrl } from './lib/supabase';
 
@@ -208,5 +210,7 @@ server.register(authRoutes);
 server.register(schedulerRoutes);
 server.register(aiRoutes);
 server.register(automationRoutes);
+server.register(contentRoutes);
+server.register(notificationsRoutes);
 
 export default server;

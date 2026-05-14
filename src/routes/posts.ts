@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Pool } from 'pg';
 import { auth } from '../auth';
 import LinkedInService from '../services/linkedin.service';
-import { sendPostPublishedEmail } from '../lib/email';
+import { notifyPostSuccess, notifyPostFailure } from '../lib/notifications';
 import { downloadVideoFromUrl, uploadVideoToStorage, downloadVideoFromStorage, deleteVideoFromStorage, getVideoPublicUrl } from '../lib/supabase';
 
 const pool = new Pool({
@@ -37,10 +37,22 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     const hasImage = !!post.image_base64;
     const hasVideo = !!post.video_storage_path;
 
+    // When the full base64 is present (GET /posts/:id uses SELECT *), build a data URL so the
+    // browser can render it without a second authenticated request. For list responses where only
+    // a boolean IS NOT NULL alias is returned, fall back to the image-serving endpoint.
+    let imageUrl: string | null = null;
+    if (typeof post.image_base64 === 'string') {
+      imageUrl = `data:${post.image_type || 'image/jpeg'};base64,${post.image_base64}`;
+    } else if (hasImage) {
+      imageUrl = `/posts/${post.id}/image`;
+    }
+
     return {
       ...post,
       has_image: hasImage,
       has_video: hasVideo,
+      image_base64: undefined,
+      image_url: imageUrl,
       video_url: hasVideo ? getVideoPublicUrl(post.video_storage_path) : null,
     };
   }
@@ -107,25 +119,17 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   }
 
-  // Fire-and-forget email notification after a successful publish
-  async function notifyPublished(userId: string, postContent: string, publishedAt: Date) {
-    try {
-      const client = await pool.connect();
-      try {
-        const { rows } = await client.query(
-          `SELECT name, email FROM public."user" WHERE id = $1`,
-          [userId]
-        );
-        if (rows.length === 0) return;
-        const { name, email } = rows[0];
-        await sendPostPublishedEmail(email, name, postContent, publishedAt.toISOString());
-        fastify.log.info(`Published email sent to ${email}`);
-      } finally {
-        client.release();
-      }
-    } catch (err: any) {
-      fastify.log.error(`Failed to send publish notification email: ${err.message}`);
-    }
+  // Fire-and-forget helpers — insert DB notification row + send email (both pref-gated)
+  function notifyPublished(userId: string, postContent: string, publishedAt: Date) {
+    notifyPostSuccess(pool, userId, postContent, publishedAt).catch((err: any) =>
+      fastify.log.error(`Failed to send publish notification: ${err.message}`)
+    );
+  }
+
+  function notifyFailed(userId: string, postContent: string, reason?: string) {
+    notifyPostFailure(pool, userId, postContent, reason).catch((err: any) =>
+      fastify.log.error(`Failed to send failure notification: ${err.message}`)
+    );
   }
 
   // POST /posts — create (and optionally publish) a post
@@ -284,6 +288,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
                VALUES ($1, $2, $3, $4, 'failed')`,
               [userId, content, post_type, link_url || null]
             );
+            notifyFailed(userId, content, err.message);
             return reply.status(err.statusCode || 502).send({
               success: false,
               error: err.code || 'LINKEDIN_PUBLISH_FAILED',
@@ -387,7 +392,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
             if (isNaN(parsed.getTime())) {
               return reply.status(400).send({ message: 'Invalid scheduled_at format' });
             }
-            if (parsed <= new Date()) {
+            if (parsed < new Date(Date.now() - 60_000)) {
               return reply.status(400).send({ message: 'scheduled_at must be in the future' });
             }
             newScheduledAt = parsed;
@@ -450,6 +455,11 @@ export default async function postsRoutes(fastify: FastifyInstance) {
         const post = postResult.rows[0];
 
         // 2. Must be a draft or scheduled (allow manual early publish of scheduled posts)
+        // Already published → idempotent success so double-taps don't surface an error
+        if (post.status === 'published') {
+          return reply.send({ success: true, post: addMediaPreviewFields(post) });
+        }
+
         if (post.status !== 'draft' && post.status !== 'scheduled') {
           return reply.status(400).send({
             error: 'Post cannot be published',
@@ -475,6 +485,8 @@ export default async function postsRoutes(fastify: FastifyInstance) {
             `UPDATE public.posts SET status = 'failed', updated_at = NOW() WHERE id = $1`,
             [id]
           );
+
+          notifyFailed(post.user_id, post.content, err.message);
 
           return reply.status(err.statusCode || 502).send({
             success: false,
@@ -523,7 +535,9 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     try {
       const result = await client.query(
         `SELECT id, user_id, content, post_type, link_url, linkedin_post_id, status,
-                scheduled_at, published_at, image_type, image_base64, video_storage_path, created_at, updated_at
+                scheduled_at, published_at, image_type,
+                (image_base64 IS NOT NULL) AS image_base64,
+                video_storage_path, created_at, updated_at
          FROM public.posts WHERE user_id = $1 ORDER BY created_at DESC`,
         [session.user.id]
       );
@@ -554,6 +568,35 @@ export default async function postsRoutes(fastify: FastifyInstance) {
         }
 
         return reply.send({ post: addMediaPreviewFields(result.rows[0]) });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  // GET /posts/:id/image — serve the stored image binary for a post
+  fastify.get(
+    '/posts/:id/image',
+    async (request: FastifyRequest<{ Params: PostParams }>, reply: FastifyReply) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+      const client = await pool.connect();
+      try {
+        const result = await client.query(
+          `SELECT image_base64, image_type FROM public.posts WHERE id = $1 AND user_id = $2`,
+          [request.params.id, session.user.id]
+        );
+
+        if (result.rows.length === 0) return reply.status(404).send({ error: 'Post not found' });
+
+        const { image_base64, image_type } = result.rows[0];
+        if (!image_base64) return reply.status(404).send({ error: 'No image for this post' });
+
+        const buffer = Buffer.from(image_base64, 'base64');
+        reply.header('Content-Type', image_type || 'image/jpeg');
+        reply.header('Cache-Control', 'private, max-age=86400');
+        return reply.send(buffer);
       } finally {
         client.release();
       }

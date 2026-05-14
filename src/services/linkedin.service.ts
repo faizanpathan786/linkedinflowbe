@@ -16,7 +16,7 @@ export default class LinkedInService {
     this.clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
     this.redirectUri = process.env.LINKEDIN_REDIRECT_URI;
     this.apiBaseUrl = "https://api.linkedin.com/v2";
-    this.scope = "openid profile email w_member_social r_member_social"
+    this.scope = "openid profile email w_member_social"
 
     // Set default axios timeouts for LinkedIn API requests
     this.axiosConfig = {

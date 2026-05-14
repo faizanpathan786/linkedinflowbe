@@ -1,5 +1,5 @@
 import { test, describe, beforeAll, afterAll } from 'node:test';
-import * as assert from 'node:assert';
+import assert from 'node:assert';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';

@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: lflow-backend
+    runtime: node
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: node dist/src/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production

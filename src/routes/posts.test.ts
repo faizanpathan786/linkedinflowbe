@@ -1,4 +1,4 @@
-import { test, describe, beforeAll, afterAll } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
@@ -60,7 +60,7 @@ describe('Video Posts Functionality', async () => {
   let fastify: any;
   let mockPool: any;
 
-  beforeAll(async () => {
+  before(async () => {
     fastify = Fastify({
       logger: { level: 'error' },
     });
@@ -134,7 +134,7 @@ describe('Video Posts Functionality', async () => {
     }
   });
 
-  afterAll(async () => {
+  after(async () => {
     await fastify.close();
   });
 

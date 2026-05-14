@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
+    "start": "node dist/src/index.js",
     "dev": "nodemon -e ts,json,env --exec ts-node --files -r dotenv/config src/index.ts",
     "test": "LOG_LEVEL=error node -r ts-node/register --test src/**/*.test.ts",
     "lint": "biome lint src",

@@ -315,6 +315,29 @@ export default class LinkedInService {
     return assetUrn; // e.g. urn:li:digitalmediaAsset:...
   }
 
+  // Fetch social action stats (likes, comments, shares) for a published post.
+  // Requires r_member_social scope. shareUrn is the linkedin_post_id stored in the DB
+  // e.g. "urn:li:ugcPost:7234567890123456789"
+  async getPostAnalytics(accessToken: string, shareUrn: string): Promise<any> {
+    try {
+      const encodedUrn = encodeURIComponent(shareUrn);
+      const response = await axios.get(
+        `${this.apiBaseUrl}/socialActions/${encodedUrn}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'X-Restli-Protocol-Version': '2.0.0',
+          },
+          timeout: 10000,
+        }
+      );
+      return response.data;
+    } catch (err: any) {
+      this.fastify?.log?.error?.('Error fetching post analytics:', err.response?.data || err.message);
+      throw new Error(`Failed to fetch post analytics: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
   // Refresh token
   async refreshAccessToken(refreshToken: string): Promise<any> {
     try {

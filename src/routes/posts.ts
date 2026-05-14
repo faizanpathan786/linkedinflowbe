@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Pool } from 'pg';
 import { auth } from '../auth';
 import LinkedInService from '../services/linkedin.service';
-import { sendPostPublishedEmail } from '../lib/email';
+import { notifyPostSuccess, notifyPostFailure } from '../lib/notifications';
 import { downloadVideoFromUrl, uploadVideoToStorage, downloadVideoFromStorage, deleteVideoFromStorage, getVideoPublicUrl } from '../lib/supabase';
 
 const pool = new Pool({
@@ -11,7 +11,7 @@ const pool = new Pool({
 });
 
 type PostType = 'text' | 'image' | 'link' | 'video';
-type PostStatus = 'draft' | 'scheduled' | 'published' | 'failed';
+type PostStatus = 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
 
 interface CreatePostBody {
   content: string;
@@ -37,10 +37,22 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     const hasImage = !!post.image_base64;
     const hasVideo = !!post.video_storage_path;
 
+    // When the full base64 is present (GET /posts/:id uses SELECT *), build a data URL so the
+    // browser can render it without a second authenticated request. For list responses where only
+    // a boolean IS NOT NULL alias is returned, fall back to the image-serving endpoint.
+    let imageUrl: string | null = null;
+    if (typeof post.image_base64 === 'string') {
+      imageUrl = `data:${post.image_type || 'image/jpeg'};base64,${post.image_base64}`;
+    } else if (hasImage) {
+      imageUrl = `/posts/${post.id}/image`;
+    }
+
     return {
       ...post,
       has_image: hasImage,
       has_video: hasVideo,
+      image_base64: undefined,
+      image_url: imageUrl,
       video_url: hasVideo ? getVideoPublicUrl(post.video_storage_path) : null,
     };
   }
@@ -107,25 +119,17 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   }
 
-  // Fire-and-forget email notification after a successful publish
-  async function notifyPublished(userId: string, postContent: string, publishedAt: Date) {
-    try {
-      const client = await pool.connect();
-      try {
-        const { rows } = await client.query(
-          `SELECT name, email FROM public."user" WHERE id = $1`,
-          [userId]
-        );
-        if (rows.length === 0) return;
-        const { name, email } = rows[0];
-        await sendPostPublishedEmail(email, name, postContent, publishedAt.toISOString());
-        fastify.log.info(`Published email sent to ${email}`);
-      } finally {
-        client.release();
-      }
-    } catch (err: any) {
-      fastify.log.error(`Failed to send publish notification email: ${err.message}`);
-    }
+  // Fire-and-forget helpers — insert DB notification row + send email (both pref-gated)
+  function notifyPublished(userId: string, postContent: string, publishedAt: Date) {
+    notifyPostSuccess(pool, userId, postContent, publishedAt).catch((err: any) =>
+      fastify.log.error(`Failed to send publish notification: ${err.message}`)
+    );
+  }
+
+  function notifyFailed(userId: string, postContent: string, reason?: string) {
+    notifyPostFailure(pool, userId, postContent, reason).catch((err: any) =>
+      fastify.log.error(`Failed to send failure notification: ${err.message}`)
+    );
   }
 
   // POST /posts — create (and optionally publish) a post
@@ -200,6 +204,17 @@ export default async function postsRoutes(fastify: FastifyInstance) {
 
       if (!content) return reply.status(400).send({ error: 'content is required' });
 
+      // Validate post_type consistency with media
+      if (post_type === 'video' && !video_url && !video_base64) {
+        return reply.status(400).send({ error: 'post_type is "video" but no video provided' });
+      }
+      if (post_type === 'image' && !image_base64) {
+        return reply.status(400).send({ error: 'post_type is "image" but no image provided' });
+      }
+      if (post_type === 'link' && !link_url) {
+        return reply.status(400).send({ error: 'post_type is "link" but no link_url provided' });
+      }
+
       // scheduled_at takes priority over publish_now
       const scheduledDate = scheduled_at ? new Date(scheduled_at) : null;
       const isScheduled = !!scheduledDate && scheduledDate > new Date();
@@ -273,6 +288,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
                VALUES ($1, $2, $3, $4, 'failed')`,
               [userId, content, post_type, link_url || null]
             );
+            notifyFailed(userId, content, err.message);
             return reply.status(err.statusCode || 502).send({
               success: false,
               error: err.code || 'LINKEDIN_PUBLISH_FAILED',
@@ -376,7 +392,7 @@ export default async function postsRoutes(fastify: FastifyInstance) {
             if (isNaN(parsed.getTime())) {
               return reply.status(400).send({ message: 'Invalid scheduled_at format' });
             }
-            if (parsed <= new Date()) {
+            if (parsed < new Date(Date.now() - 60_000)) {
               return reply.status(400).send({ message: 'scheduled_at must be in the future' });
             }
             newScheduledAt = parsed;
@@ -439,6 +455,11 @@ export default async function postsRoutes(fastify: FastifyInstance) {
         const post = postResult.rows[0];
 
         // 2. Must be a draft or scheduled (allow manual early publish of scheduled posts)
+        // Already published → idempotent success so double-taps don't surface an error
+        if (post.status === 'published') {
+          return reply.send({ success: true, post: addMediaPreviewFields(post) });
+        }
+
         if (post.status !== 'draft' && post.status !== 'scheduled') {
           return reply.status(400).send({
             error: 'Post cannot be published',
@@ -464,6 +485,8 @@ export default async function postsRoutes(fastify: FastifyInstance) {
             `UPDATE public.posts SET status = 'failed', updated_at = NOW() WHERE id = $1`,
             [id]
           );
+
+          notifyFailed(post.user_id, post.content, err.message);
 
           return reply.status(err.statusCode || 502).send({
             success: false,
@@ -512,7 +535,9 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     try {
       const result = await client.query(
         `SELECT id, user_id, content, post_type, link_url, linkedin_post_id, status,
-                scheduled_at, published_at, image_type, image_base64, video_storage_path, created_at, updated_at
+                scheduled_at, published_at, image_type,
+                (image_base64 IS NOT NULL) AS image_base64,
+                video_storage_path, created_at, updated_at
          FROM public.posts WHERE user_id = $1 ORDER BY created_at DESC`,
         [session.user.id]
       );
@@ -549,6 +574,127 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // GET /posts/:id/image — serve the stored image binary for a post
+  fastify.get(
+    '/posts/:id/image',
+    async (request: FastifyRequest<{ Params: PostParams }>, reply: FastifyReply) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+      const client = await pool.connect();
+      try {
+        const result = await client.query(
+          `SELECT image_base64, image_type FROM public.posts WHERE id = $1 AND user_id = $2`,
+          [request.params.id, session.user.id]
+        );
+
+        if (result.rows.length === 0) return reply.status(404).send({ error: 'Post not found' });
+
+        const { image_base64, image_type } = result.rows[0];
+        if (!image_base64) return reply.status(404).send({ error: 'No image for this post' });
+
+        const buffer = Buffer.from(image_base64, 'base64');
+        reply.header('Content-Type', image_type || 'image/jpeg');
+        reply.header('Cache-Control', 'private, max-age=86400');
+        return reply.send(buffer);
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  // GET /posts/:id/logs — publish attempt history for a post
+  fastify.get(
+    '/posts/:id/logs',
+    async (request: FastifyRequest<{ Params: PostParams }>, reply: FastifyReply) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+      const { id } = request.params;
+      const client = await pool.connect();
+      try {
+        const postResult = await client.query(
+          `SELECT id FROM public.posts WHERE id = $1 AND user_id = $2`,
+          [id, session.user.id]
+        );
+        if (postResult.rows.length === 0) {
+          return reply.status(404).send({ error: 'Post not found' });
+        }
+
+        try {
+          const logs = await client.query(
+            `SELECT id, post_id, attempt_number, status, http_status, linkedin_urn,
+                    error_code, error_message, duration_ms, created_at
+             FROM public.post_publish_logs
+             WHERE post_id = $1
+             ORDER BY attempt_number ASC`,
+            [id]
+          );
+          return reply.send({ success: true, logs: logs.rows });
+        } catch (err: any) {
+          if (err.code === '42P01') {
+            return reply.send({ success: true, logs: [] });
+          }
+          throw err;
+        }
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  // POST /posts/:id/duplicate — create a draft copy of an existing post
+  fastify.post(
+    '/posts/:id/duplicate',
+    async (request: FastifyRequest<{ Params: PostParams }>, reply: FastifyReply) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+      const { id } = request.params;
+      const userId = session.user.id;
+      const client = await pool.connect();
+      try {
+        const postResult = await client.query(
+          `SELECT * FROM public.posts WHERE id = $1 AND user_id = $2`,
+          [id, userId]
+        );
+        if (postResult.rows.length === 0) {
+          return reply.status(404).send({ error: 'Post not found' });
+        }
+
+        const original = postResult.rows[0];
+
+        try {
+          const result = await client.query(
+            `INSERT INTO public.posts
+               (user_id, content, post_type, link_url, image_base64, image_type,
+                video_storage_path, status, scheduled_at, published_at,
+                linkedin_post_id, idempotency_key)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft', NULL, NULL, NULL, NULL)
+             RETURNING id, user_id, content, post_type, link_url, image_type,
+                       video_storage_path, status, scheduled_at, published_at,
+                       created_at, updated_at`,
+            [
+              userId,
+              original.content,
+              original.post_type,
+              original.link_url ?? null,
+              original.image_base64 ?? null,
+              original.image_type ?? null,
+              original.video_storage_path ?? null,
+            ]
+          );
+          return reply.send({ success: true, post: addMediaPreviewFields(result.rows[0]) });
+        } catch (err: any) {
+          fastify.log.error('Duplicate post error:', err.message);
+          return reply.status(500).send({ error: 'Failed to duplicate post' });
+        }
+      } finally {
+        client.release();
+      }
+    }
+  );
+
   // DELETE /posts/:id — delete a post
   fastify.delete(
     '/posts/:id',
@@ -570,6 +716,83 @@ export default async function postsRoutes(fastify: FastifyInstance) {
         }
 
         return reply.send({ success: true });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  // POST /posts/:id/retry — re-queue a failed post for publishing
+  fastify.post(
+    '/posts/:id/retry',
+    async (request: FastifyRequest<{ Params: PostParams }>, reply: FastifyReply) => {
+      const session = await auth.api.getSession({ headers: request.headers as any });
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+      const { id } = request.params;
+      const client = await pool.connect();
+      try {
+        const postResult = await client.query(
+          `SELECT * FROM public.posts WHERE id = $1 AND user_id = $2`,
+          [id, session.user.id]
+        );
+
+        if (postResult.rows.length === 0) {
+          return reply.status(404).send({ success: false, message: 'Post not found' });
+        }
+
+        const post = postResult.rows[0];
+
+        if (post.status !== 'failed') {
+          return reply.status(400).send({
+            success: false,
+            message: 'Only failed posts can be retried',
+            code: 'INVALID_STATUS',
+          });
+        }
+
+        const tokenResult = await client.query(
+          `SELECT expires_at FROM public.linkedin_tokens WHERE user_id = $1`,
+          [post.user_id]
+        );
+
+        if (tokenResult.rows.length === 0 || new Date(tokenResult.rows[0].expires_at) < new Date()) {
+          return reply.status(400).send({
+            success: false,
+            message: 'Your LinkedIn connection has expired. Please reconnect.',
+            code: 'TOKEN_EXPIRED',
+          });
+        }
+
+        // Ensure idempotency_key exists — reuse existing key so the worker won't double-post
+        let idempotencyKey = post.idempotency_key;
+        if (!idempotencyKey) {
+          const crypto = require('crypto');
+          idempotencyKey = crypto
+            .createHash('sha256')
+            .update(`${post.id}:${post.user_id}:${post.scheduled_at ?? post.created_at}`)
+            .digest('hex')
+            .slice(0, 32);
+          await client.query(
+            `UPDATE public.posts SET idempotency_key = $1 WHERE id = $2`,
+            [idempotencyKey, id]
+          );
+        }
+
+        // Set back to scheduled with scheduled_at = NOW() so the cron picks it up immediately
+        const updated = await client.query(
+          `UPDATE public.posts
+           SET status = 'scheduled',
+               scheduled_at = NOW(),
+               failure_reason = NULL,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING id, user_id, content, post_type, link_url, linkedin_post_id,
+                     status, failure_reason, scheduled_at, published_at, created_at, updated_at`,
+          [id]
+        );
+
+        return reply.send({ success: true, post: updated.rows[0] });
       } finally {
         client.release();
       }
@@ -616,9 +839,52 @@ export default async function postsRoutes(fastify: FastifyInstance) {
             scheduled_at,
             image_base64,
             image_type,
+            video_url,
+            video_base64,
+            video_type,
           } = posts[i];
 
           try {
+            // Validate post_type consistency with media
+            if (post_type === 'video' && !video_url && !video_base64) {
+              errors.push({ index: i, message: 'post_type is "video" but no video provided' });
+              continue;
+            }
+            if (post_type === 'image' && !image_base64) {
+              errors.push({ index: i, message: 'post_type is "image" but no image provided' });
+              continue;
+            }
+            if (post_type === 'link' && !link_url) {
+              errors.push({ index: i, message: 'post_type is "link" but no link_url provided' });
+              continue;
+            }
+
+            // Handle video — either base64 from browser file picker or a public URL
+            let videoStoragePath: string | null = null;
+            if (video_base64) {
+              try {
+                const buffer = Buffer.from(video_base64, 'base64');
+                const ct = video_type || 'video/mp4';
+                const { storagePath } = await uploadVideoToStorage(buffer, ct, userId);
+                videoStoragePath = storagePath;
+                fastify.log.info(`Bulk: Video (base64) stored at: ${storagePath}`);
+              } catch (err: any) {
+                errors.push({ index: i, message: `Failed to upload video: ${err.message}` });
+                continue;
+              }
+            } else if (video_url) {
+              try {
+                fastify.log.info(`Bulk: Downloading video from URL: ${video_url}`);
+                const { buffer, contentType } = await downloadVideoFromUrl(video_url);
+                const { storagePath } = await uploadVideoToStorage(buffer, contentType, userId);
+                videoStoragePath = storagePath;
+                fastify.log.info(`Bulk: Video (url) stored at: ${storagePath}`);
+              } catch (err: any) {
+                errors.push({ index: i, message: `Failed to process video: ${err.message}` });
+                continue;
+              }
+            }
+
             let scheduledDate: Date | null = null;
             let status: PostStatus = 'draft';
 
@@ -645,9 +911,9 @@ export default async function postsRoutes(fastify: FastifyInstance) {
 
             const result = await client.query(
               `INSERT INTO public.posts
-                 (user_id, content, post_type, link_url, status, scheduled_at, image_base64, image_type)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-               RETURNING id, user_id, content, post_type, link_url, status, scheduled_at, image_type, created_at`,
+                 (user_id, content, post_type, link_url, status, scheduled_at, image_base64, image_type, video_storage_path)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING id, user_id, content, post_type, link_url, status, scheduled_at, image_type, video_storage_path, created_at`,
               [
                 userId,
                 content,
@@ -657,10 +923,11 @@ export default async function postsRoutes(fastify: FastifyInstance) {
                 scheduledDate,
                 image_base64 || null,
                 image_type || null,
+                videoStoragePath || null,
               ]
             );
 
-            created.push(result.rows[0]);
+            created.push(addMediaPreviewFields(result.rows[0]));
           } catch (err: any) {
             errors.push({ index: i, message: err.message });
           }
@@ -765,20 +1032,247 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // POST /api/posts/analyze — analyze content and return performance score + optimal time
+  fastify.post(
+    '/api/posts/analyze',
+    async (
+      request: FastifyRequest<{
+        Body: { content: string; post_type?: 'text' | 'image' | 'video' | 'link' };
+      }>,
+      reply: FastifyReply
+    ) => {
+      try {
+        const session = await auth.api.getSession({ headers: request.headers as any });
+        if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+        const userId = session.user.id;
+        const { content, post_type } = request.body;
+
+        // Validation
+        if (!content || content.length < 10) {
+          return reply.status(400).send({
+            error: 'Content must be at least 10 characters',
+          });
+        }
+
+        if (content.length > 3000) {
+          return reply.status(400).send({
+            error: 'Content must be under 3000 characters',
+          });
+        }
+
+        // Check cache first
+        const crypto = require('crypto');
+        const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+
+        const client = await pool.connect();
+        try {
+          const cached = await client.query(
+            `SELECT * FROM public.performance_cache
+             WHERE user_id = $1 AND content_hash = $2 AND expires_at > NOW()
+             LIMIT 1`,
+            [userId, contentHash]
+          );
+
+          if (cached.rows.length > 0) {
+            const c = cached.rows[0];
+            return reply.send({
+              performanceScore: {
+                score: parseFloat(c.performance_score || '0'),
+                predictedLikes: c.predicted_likes || 0,
+                predictedComments: Math.round((c.predicted_likes || 0) * 0.15),
+                breakdown: {},
+              },
+              optimalTime: {
+                recommendedHour: c.optimal_posting_hour || 9,
+                recommendedDay: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][
+                  new Date().getDay()
+                ],
+                engagementLiftPercent: parseFloat(c.engagement_lift_percent || '0'),
+                engagementPrediction: {
+                  ifPostedNow: 35,
+                  ifPostedOptimal: Math.round(35 * (1 + (parseFloat(c.engagement_lift_percent || '0') / 100))),
+                  potentialGain: Math.round(35 * (parseFloat(c.engagement_lift_percent || '0') / 100)),
+                },
+              },
+              suggestions: [],
+              abtestOptions: [],
+            });
+          }
+
+          // Extract features and get analytics
+          const { FeatureExtractor } = await import('../services/feature-extractor');
+          const { MLService } = await import('../services/ml-service');
+          const { AnalyticsService } = await import('../services/analytics-service');
+
+          const features = FeatureExtractor.extractFeatures(content);
+
+          const userAnalytics = await AnalyticsService.getUserAnalytics(userId);
+
+          const userHistory = await client.query(
+            `SELECT * FROM public.posts
+             WHERE user_id = $1 AND status = 'published'
+             ORDER BY published_at DESC
+             LIMIT 50`,
+            [userId]
+          );
+
+          const industryBenchmarks = {
+            videoEngagementRate: 0.08,
+            avgEngagementRate: 0.03,
+            trendingHashtagBoost: false,
+          };
+
+          // ML: Predict performance
+          const performanceScore = await MLService.predictPerformance({
+            features,
+            userAnalytics,
+            userHistory: userHistory.rows,
+            industryBenchmarks,
+          });
+
+          // ML: Predict optimal time
+          const optimalTime = await MLService.predictOptimalTime({
+            userAnalytics,
+            dayOfWeek: new Date().getDay(),
+          });
+
+          // Generate suggestions
+          const suggestions = generateSuggestions(features, performanceScore, userAnalytics);
+
+          // Generate A/B test variations
+          const abtestOptions = generateABTestVariations(content);
+
+          // Cache the result (expires in 7 days)
+          const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+          await client.query(
+            `INSERT INTO public.performance_cache
+             (id, user_id, content_hash, performance_score, predicted_likes,
+              predicted_comments, optimal_posting_hour, engagement_lift_percent, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+              require('crypto').randomUUID ? require('crypto').randomUUID() : 'cache-' + Date.now(),
+              userId,
+              contentHash,
+              performanceScore.score,
+              performanceScore.predictedLikes,
+              performanceScore.predictedComments,
+              optimalTime.recommendedHour,
+              optimalTime.engagementLiftPercent,
+              expiresAt,
+            ]
+          );
+
+          return reply.send({
+            performanceScore,
+            optimalTime,
+            suggestions,
+            abtestOptions,
+          });
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        fastify.log.error({ error }, '[ANALYZE] Error');
+        return reply.status(500).send({
+          error: 'Failed to analyze post',
+          details: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+  );
+
   // NOTE: POST /posts/import is registered in server.ts directly
   // This is a placeholder to avoid duplicate route errors
   fastify.get('/posts/import/template', async (request: FastifyRequest, reply: FastifyReply) => {
     const session = await auth.api.getSession({ headers: request.headers as any });
     if (!session) return reply.status(401).send({ error: 'Unauthorized' });
     return reply.send({
-      columns: ['content', 'post_type', 'link_url', 'scheduled_at', 'publish_now'],
+      columns: ['content', 'post_type', 'link_url', 'image_url', 'video_url', 'scheduled_at', 'publish_now'],
       example_rows: [
-        { content: 'Your post text here', post_type: 'text', link_url: '', scheduled_at: '2026-05-01T10:00:00', publish_now: 'false' },
-        { content: 'Post with a link', post_type: 'link', link_url: 'https://example.com', scheduled_at: '2026-05-02T10:00:00', publish_now: 'false' },
-        { content: 'Publish immediately', post_type: 'text', link_url: '', scheduled_at: '', publish_now: 'true' },
+        { content: 'Your post text here', post_type: 'text', link_url: '', image_url: '', video_url: '', scheduled_at: '2026-05-01T10:00:00', publish_now: 'false' },
+        { content: 'Post with a link', post_type: 'link', link_url: 'https://example.com', image_url: '', video_url: '', scheduled_at: '2026-05-02T10:00:00', publish_now: 'false' },
+        { content: 'Post with an image', post_type: 'image', link_url: '', image_url: 'https://example.com/image.jpg', video_url: '', scheduled_at: '2026-05-03T10:00:00', publish_now: 'false' },
+        { content: 'Post with a video', post_type: 'video', link_url: '', image_url: '', video_url: 'https://www.w3schools.com/html/mov_bbb.mp4', scheduled_at: '2026-05-04T10:00:00', publish_now: 'false' },
       ],
+      notes: 'video_url and image_url must be publicly accessible URLs. Test video: https://www.w3schools.com/html/mov_bbb.mp4',
     });
   });
+
+  // Helper: Generate improvement suggestions
+  function generateSuggestions(features: any, score: any, analytics: any) {
+    const suggestions = [];
+
+    if (features.length < 100) {
+      suggestions.push({
+        type: 'length',
+        current: features.length,
+        suggested: '100-250',
+        impact: '+0.8 points',
+        reason: `Posts of 100-250 chars get more engagement (your avg: ${analytics.avg_post_length})`,
+      });
+    }
+
+    if (features.hashtags < 3) {
+      suggestions.push({
+        type: 'hashtags',
+        current: features.hashtags,
+        suggested: '3-5',
+        impact: '+0.5 points',
+        reason: 'Posts with 3-5 hashtags get 35% more reach',
+      });
+    } else if (features.hashtags > 8) {
+      suggestions.push({
+        type: 'hashtags',
+        current: features.hashtags,
+        suggested: '3-5',
+        impact: '+1.0 points',
+        reason: 'Too many hashtags looks spammy - reduce to 3-5',
+      });
+    }
+
+    if (features.toneScore < 0.2) {
+      suggestions.push({
+        type: 'tone',
+        current: 'Neutral/Negative',
+        suggested: 'More positive',
+        impact: '+1.2 points',
+        reason: 'Positive posts get 2.3x more engagement',
+      });
+    }
+
+    if (!features.hasCallToAction) {
+      suggestions.push({
+        type: 'cta',
+        suggested: 'Add call to action',
+        impact: '+1.5 points',
+        reason: 'Posts asking for engagement get 40% more comments',
+      });
+    }
+
+    return suggestions;
+  }
+
+  // Helper: Generate A/B test variations
+  function generateABTestVariations(content: string) {
+    return [
+      {
+        title: 'Hook Variation A',
+        content: `Here's what 90% of people get wrong:\n\n${content}`,
+        predictedScore: 8.2,
+      },
+      {
+        title: 'Hook Variation B',
+        content: `I spent years learning this:\n\n${content}`,
+        predictedScore: 7.9,
+      },
+      {
+        title: 'Hook Variation C',
+        content: `Quick question for you:\n\n${content}`,
+        predictedScore: 8.5,
+      },
+    ];
+  }
 
   // DEAD CODE — kept to avoid breaking the file structure
   // The actual POST /posts/import handler lives in server.ts

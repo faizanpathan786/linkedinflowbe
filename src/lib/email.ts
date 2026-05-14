@@ -121,6 +121,162 @@ export async function sendPostPublishedEmail(
   }
 }
 
+export async function sendPostFailedEmail(
+  userEmail: string,
+  userName: string,
+  postContent: string,
+  reason?: string
+): Promise<void> {
+  const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+  const preview = postContent.length > 200 ? postContent.slice(0, 200) + '…' : postContent;
+
+  const response = await resend.emails.send({
+    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+    to: userEmail,
+    subject: '⚠️ Your LinkedIn Post Failed to Publish – LFlow',
+    html: `
+      <div style="margin:0;padding:0;background-color:#f4f6f8;font-family:Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 25px rgba(0,0,0,0.08);">
+              <tr>
+                <td style="background:linear-gradient(135deg,#c0392b,#e74c3c);padding:25px;text-align:center;color:#fff;">
+                  <h1 style="margin:0;font-size:24px;">LFlow</h1>
+                  <p style="margin:5px 0 0;font-size:14px;opacity:0.8;">LinkedIn Post Automation</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:30px;text-align:center;">
+                  <h2 style="margin:0;color:#111;">Post Failed to Publish ✗</h2>
+                  <p style="color:#555;font-size:15px;">There was an issue publishing your post to LinkedIn.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 30px 20px;">
+                  <p style="color:#333;">Dear ${escapeHtml(userName)},</p>
+                  <p style="color:#555;">Unfortunately, your post could not be published to LinkedIn.</p>
+                  ${reason ? `<p style="color:#555;"><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : ''}
+                  <div style="background:#f3f2ef;border-left:4px solid #e74c3c;padding:14px 16px;margin:16px 0;border-radius:4px;">
+                    <p style="margin:0;color:#333;font-size:14px;white-space:pre-wrap;">${escapeHtml(preview)}</p>
+                  </div>
+                  <p style="color:#555;">You can retry publishing from your posts dashboard.</p>
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="padding:20px;">
+                  <a href="${appUrl}/posts"
+                     style="background:linear-gradient(135deg,#0a66c2,#0077b5);color:#fff;padding:14px 28px;text-decoration:none;border-radius:30px;font-weight:bold;display:inline-block;">
+                    Go to Posts
+                  </a>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:20px 30px;text-align:center;color:#777;font-size:13px;">
+                  <p style="margin:0;"><strong>The LFlow Team</strong></p>
+                  <p style="margin-top:10px;font-size:11px;color:#aaa;">© 2026 LFlow. All rights reserved.</p>
+                </td>
+              </tr>
+            </table>
+            <div style="height:20px;"></div>
+          </td></tr>
+        </table>
+      </div>
+    `,
+  });
+
+  if (response.error) {
+    throw new Error(`Resend error: ${response.error.message}`);
+  }
+}
+
+export async function sendWeeklyDigestEmail(
+  userEmail: string,
+  userName: string,
+  stats: {
+    total: number;
+    published: number;
+    failed: number;
+    scheduled: number;
+    weekOf: string;
+  }
+): Promise<void> {
+  const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+
+  const response = await resend.emails.send({
+    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+    to: userEmail,
+    subject: `📊 Your Weekly LFlow Report – ${stats.weekOf}`,
+    html: `
+      <div style="margin:0;padding:0;background-color:#f4f6f8;font-family:Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 25px rgba(0,0,0,0.08);">
+              <tr>
+                <td style="background:linear-gradient(135deg,#0a66c2,#0077b5);padding:25px;text-align:center;color:#fff;">
+                  <h1 style="margin:0;font-size:24px;">LFlow</h1>
+                  <p style="margin:5px 0 0;font-size:14px;opacity:0.8;">Weekly Report – ${escapeHtml(stats.weekOf)}</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:30px;text-align:center;">
+                  <h2 style="margin:0;color:#111;">Your Week in Review</h2>
+                  <p style="color:#555;font-size:15px;">Here's how your LinkedIn content performed this week.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 30px 20px;">
+                  <p style="color:#333;">Hi ${escapeHtml(userName)},</p>
+                  <table width="100%" cellpadding="12" cellspacing="0" style="border-collapse:collapse;margin:16px 0;">
+                    <tr style="background:#f3f2ef;">
+                      <td style="font-weight:bold;color:#333;border-radius:4px 0 0 4px;">Total Posts</td>
+                      <td style="text-align:right;color:#0a66c2;font-weight:bold;font-size:18px;border-radius:0 4px 4px 0;">${stats.total}</td>
+                    </tr>
+                    <tr>
+                      <td style="color:#27ae60;font-weight:bold;">✓ Published</td>
+                      <td style="text-align:right;color:#27ae60;font-weight:bold;font-size:18px;">${stats.published}</td>
+                    </tr>
+                    <tr style="background:#f3f2ef;">
+                      <td style="color:#e74c3c;font-weight:bold;">✗ Failed</td>
+                      <td style="text-align:right;color:#e74c3c;font-weight:bold;font-size:18px;">${stats.failed}</td>
+                    </tr>
+                    <tr>
+                      <td style="color:#f39c12;font-weight:bold;">⏰ Scheduled</td>
+                      <td style="text-align:right;color:#f39c12;font-weight:bold;font-size:18px;">${stats.scheduled}</td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="padding:20px;">
+                  <a href="${appUrl}/posts"
+                     style="background:linear-gradient(135deg,#0a66c2,#0077b5);color:#fff;padding:14px 28px;text-decoration:none;border-radius:30px;font-weight:bold;display:inline-block;">
+                    View All Posts
+                  </a>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:20px 30px;text-align:center;color:#777;font-size:13px;">
+                  <p style="margin:0;"><strong>The LFlow Team</strong></p>
+                  <p style="margin-top:10px;font-size:11px;color:#aaa;">
+                    You're receiving this because weekly reports are enabled.
+                    <a href="${appUrl}/settings" style="color:#0a66c2;">Manage preferences</a>
+                  </p>
+                  <p style="font-size:11px;color:#aaa;">© 2026 LFlow. All rights reserved.</p>
+                </td>
+              </tr>
+            </table>
+            <div style="height:20px;"></div>
+          </td></tr>
+        </table>
+      </div>
+    `,
+  });
+
+  if (response.error) {
+    throw new Error(`Resend error: ${response.error.message}`);
+  }
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')

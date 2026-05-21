@@ -28,7 +28,17 @@ interface GeneratePostBody {
 }
 
 function buildSystemPrompt(_brand_voice: GeneratePostBody['brand_voice'], _style: string): string {
-  return `You are a world-class LinkedIn ghostwriter for founders and operators. You write posts that feel real, earned, and specific — never generic, never corporate. Your posts get high engagement because they are honest, concrete, and make the reader feel something.`;
+  return `You are a world-class LinkedIn ghostwriter for B2B founders. Your posts consistently go viral because they feel personal, earned, and specific — never generic, never corporate.
+
+Your writing rules:
+- Open with a hook that stops the scroll in the first 2 seconds
+- Write like you're texting a smart friend, not presenting to a boardroom
+- Use short sentences. One idea per line. White space is your friend.
+- Every paragraph must earn its place — cut anything that doesn't add tension, proof, or insight
+- End with something that makes the reader think or act
+- Never use: "In today's world", "I'm excited to share", "Game-changer", "Leverage", "Synergy", "Thrilled", "Journey", "Hustle"
+- No corporate jargon, no buzzwords, no filler
+- Max 280 words per post`;
 }
 
 function buildUserPrompt(
@@ -70,7 +80,16 @@ Hard rules:
 - Max 280 words per variation
 
 Return ONLY valid JSON — no markdown fences, no explanation, nothing else:
-{"variations":[{"type":"story","hook":"<hook sentence>","content":"<full post>"},{"type":"opinion","hook":"<hook sentence>","content":"<full post>"},{"type":"insight","hook":"<hook sentence>","content":"<full post>"}]}`;
+{"variations":[{"type":"stat-hook","hook":"<hook sentence>","content":"<full post>"},{"type":"confession-hook","hook":"<hook sentence>","content":"<full post>"},{"type":"tension-hook","hook":"<hook sentence>","content":"<full post>"}]}`;
+}
+
+interface RephrasePostBody {
+  content: string;
+  brand_voice?: {
+    tone?: string;
+    style?: string;
+    examples?: string;
+  };
 }
 
 interface GenerateCaptionBody {
@@ -98,44 +117,120 @@ export default async function aiRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({ error: 'AI generation not configured' });
       }
 
-      let raw: string;
-      try {
+      const callGroq = async () => {
         const completion = await groqClient.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
+          model: 'openai/gpt-oss-120b',
           messages: [
             { role: 'system', content: buildSystemPrompt(brand_voice, style) },
             { role: 'user', content: buildUserPrompt(answers, style, brand_voice) },
           ],
           temperature: 0.85,
-          max_tokens: 2000,
+          max_tokens: 4000,
         });
-        raw = completion.choices[0]?.message?.content ?? '';
+        return completion.choices[0]?.message?.content ?? '';
+      };
+
+      const parseRaw = (raw: string) => {
+        // Strip markdown fences if model wrapped response
+        let clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        // Extract JSON object if model added preamble text
+        const jsonStart = clean.indexOf('{');
+        const jsonEnd = clean.lastIndexOf('}');
+        if (jsonStart !== -1 && jsonEnd !== -1) clean = clean.slice(jsonStart, jsonEnd + 1);
+        const result = JSON.parse(clean) as { variations: Array<{ type: string; hook: string; content: string }> };
+        if (!Array.isArray(result.variations) || result.variations.length === 0) throw new Error('empty variations array');
+        return result;
+      };
+
+      let raw: string;
+      try {
+        raw = await callGroq();
       } catch (err: any) {
-        fastify.log.error({ err: err.message, status: err.status, code: err.code }, 'AI generate error');
-        if (err.message?.includes('timeout') || err.status === 408) {
-          return reply.status(504).send({ error: 'Generation timed out — try again' });
-        }
+        fastify.log.error({ err: err.message, status: err.status }, 'Groq generate error');
         return reply.status(500).send({ error: 'Failed to generate posts', message: err.message });
       }
 
       let parsed: { variations: Array<{ type: string; hook: string; content: string }> };
       try {
-        const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        // Escape literal control characters inside JSON string values
-        const sanitized = clean.replace(/"((?:[^"\\]|\\.)*)"/g, (match) =>
-          match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')
-        );
-        parsed = JSON.parse(sanitized);
-        if (!Array.isArray(parsed.variations) || parsed.variations.length === 0) throw new Error('empty variations array');
+        parsed = parseRaw(raw);
       } catch (parseErr: any) {
-        fastify.log.error({ raw, parseErr: parseErr.message }, 'Failed to parse AI response');
-        return reply.status(500).send({ error: 'Failed to parse AI response', detail: parseErr.message, raw });
+        fastify.log.warn({ raw, parseErr: parseErr.message }, 'First parse failed — retrying');
+        try {
+          const raw2 = await callGroq();
+          parsed = parseRaw(raw2);
+        } catch (err2: any) {
+          fastify.log.error({ raw, err: err2.message }, 'Second parse also failed');
+          return reply.status(500).send({ error: 'Failed to parse AI response', detail: err2.message });
+        }
       }
 
       return reply.send({ variations: parsed.variations });
     }
   );
 
+
+  // POST /api/posts/rephrase — rewrite a raw caption into a high-performing LinkedIn post
+  fastify.post(
+    '/api/posts/rephrase',
+    async (request: FastifyRequest<{ Body: RephrasePostBody }>, reply: FastifyReply) => {
+      let session: Awaited<ReturnType<typeof auth.api.getSession>>;
+      try {
+        session = await auth.api.getSession({ headers: request.headers as any });
+      } catch {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+      if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+      const { content, brand_voice } = request.body ?? ({} as RephrasePostBody);
+
+      if (!content?.trim()) {
+        return reply.status(400).send({ error: 'content is required' });
+      }
+
+      const brandVoiceText = [
+        brand_voice?.tone && `Tone: ${brand_voice.tone}`,
+        brand_voice?.style && `Style: ${brand_voice.style}`,
+        brand_voice?.examples && `Examples:\n${brand_voice.examples}`,
+      ]
+        .filter(Boolean)
+        .join('\n') || 'professional and authentic';
+
+      const userMessage = `Brand voice: ${brandVoiceText}\n\nOriginal caption:\n${content}`;
+
+      try {
+        const completion = await groqClient.chat.completions.create({
+          model: 'openai/gpt-oss-120b',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a LinkedIn content expert. Rewrite the user's raw caption into a high-performing LinkedIn post.
+
+Rules:
+- Keep the original message and facts — do NOT invent new information
+- Open with a strong hook (first line must stop the scroll)
+- Use short paragraphs (1–3 lines max) for mobile readability
+- Add relevant line breaks and white space
+- End with a clear call-to-action or thought-provoking question
+- Sound human and professional — no corporate buzzwords, no cringe
+- Stay under 3000 characters
+- If brand voice settings are provided, match that tone and style
+
+Return ONLY the rewritten post text. No explanation, no preamble, no quotes around it.`,
+            },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.8,
+          max_tokens: 1200,
+        });
+
+        const rephrased = completion.choices[0]?.message?.content?.trim() ?? '';
+        return reply.send({ success: true, content: rephrased });
+      } catch (err: any) {
+        fastify.log.error({ err: err.message }, 'Rephrase error');
+        return reply.status(500).send({ success: false, message: 'Failed to rephrase' });
+      }
+    }
+  );
 
   fastify.post(
     '/ai/generate-caption',

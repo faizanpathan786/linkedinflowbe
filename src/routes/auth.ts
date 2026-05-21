@@ -191,4 +191,47 @@ export default async function authRoutes(fastify: FastifyInstance) {
       }) as unknown as Promise<Response>
     );
   });
+
+  fastify.post('/api/auth/forgot-password', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { email } = request.body as { email: string };
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    try {
+      await auth.api.forgetPassword({
+        body: { email, redirectTo: `${frontendUrl}/reset-password` },
+        headers: request.headers as any,
+      });
+    } catch {
+      // swallow — never reveal whether the email exists
+    }
+
+    return reply.send({
+      success: true,
+      message: 'If this email is registered, a reset link has been sent.',
+    });
+  });
+
+  fastify.post('/api/auth/reset-password', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { token, password } = request.body as { token: string; password: string };
+
+    try {
+      await auth.api.resetPassword({
+        body: { token, newPassword: password },
+        headers: request.headers as any,
+      });
+      return reply.send({
+        success: true,
+        message: 'Password updated successfully.',
+      });
+    } catch (err: any) {
+      const status = err?.status ?? err?.statusCode ?? 0;
+      if (status >= 400 && status < 500) {
+        return reply.status(400).send({
+          success: false,
+          message: 'Invalid or expired reset link.',
+        });
+      }
+      throw err;
+    }
+  });
 }

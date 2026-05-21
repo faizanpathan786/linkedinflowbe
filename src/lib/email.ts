@@ -277,6 +277,131 @@ export async function sendWeeklyDigestEmail(
   }
 }
 
+export async function sendPasswordResetEmail(
+  userEmail: string,
+  userName: string,
+  resetUrl: string
+): Promise<void> {
+  const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+
+  const response = await resend.emails.send({
+    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+    to: userEmail,
+    subject: '🔐 Reset Your LFlow Password',
+    html: `
+      <div style="margin:0;padding:0;background-color:#f4f6f8;font-family:Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 25px rgba(0,0,0,0.08);">
+
+              <!-- Header -->
+              <tr>
+                <td style="background:linear-gradient(135deg,#0a66c2,#0077b5);padding:25px;text-align:center;color:#fff;">
+                  <h1 style="margin:0;font-size:24px;">LFlow</h1>
+                  <p style="margin:5px 0 0;font-size:14px;opacity:0.8;">LinkedIn Post Automation</p>
+                </td>
+              </tr>
+
+              <!-- Hero -->
+              <tr>
+                <td style="padding:30px;text-align:center;">
+                  <h2 style="margin:0;color:#111;">Reset Your Password</h2>
+                  <p style="color:#555;font-size:15px;">We received a request to reset your LFlow password.</p>
+                </td>
+              </tr>
+
+              <!-- Body -->
+              <tr>
+                <td style="padding:0 30px 20px;">
+                  <p style="color:#333;">Hi ${escapeHtml(userName)},</p>
+                  <p style="color:#555;">
+                    Click the button below to choose a new password. This link expires in
+                    <strong>1 hour</strong>.
+                  </p>
+                  <p style="color:#555;">
+                    If you didn't request a password reset, you can safely ignore this email —
+                    your password will not change.
+                  </p>
+                </td>
+              </tr>
+
+              <!-- CTA -->
+              <tr>
+                <td align="center" style="padding:20px;">
+                  <a href="${resetUrl}"
+                     style="background:linear-gradient(135deg,#0a66c2,#0077b5);
+                            color:#fff;
+                            padding:14px 28px;
+                            text-decoration:none;
+                            border-radius:30px;
+                            font-weight:bold;
+                            display:inline-block;">
+                    Reset Password
+                  </a>
+                </td>
+              </tr>
+
+              <!-- Fallback link -->
+              <tr>
+                <td style="padding:0 30px 20px;">
+                  <p style="color:#999;font-size:12px;">
+                    If the button doesn't work, copy and paste this link into your browser:<br>
+                    <a href="${resetUrl}" style="color:#0a66c2;word-break:break-all;">${resetUrl}</a>
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Divider -->
+              <tr><td style="padding:0 20px;"><hr style="border:none;border-top:1px solid #eee;"></td></tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style="padding:20px 30px;text-align:center;color:#777;font-size:13px;">
+                  <p style="margin:0;"><strong>The LFlow Team</strong></p>
+                  <p style="margin:5px 0;">
+                    🌐 <a href="${appUrl}" style="color:#0a66c2;text-decoration:none;">${appUrl}</a>
+                  </p>
+                  <p style="margin-top:10px;font-size:11px;color:#aaa;">© 2026 LFlow. All rights reserved.</p>
+                </td>
+              </tr>
+
+            </table>
+            <div style="height:20px;"></div>
+          </td></tr>
+        </table>
+      </div>
+    `,
+  });
+
+  if (response.error) {
+    throw new Error(`Resend error: ${response.error.message}`);
+  }
+}
+
+export async function sendEarlyAccessNotificationEmail(signupEmail: string): Promise<void> {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  if (!adminEmail) return;
+
+  const response = await resend.emails.send({
+    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+    to: adminEmail,
+    subject: `New Early Access Signup: ${signupEmail}`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#f4f6f8;border-radius:12px;">
+        <h2 style="margin:0 0 12px;color:#0a66c2;">New Early Access Signup</h2>
+        <p style="margin:0;color:#333;font-size:16px;">
+          <strong>${escapeHtml(signupEmail)}</strong> just joined the early access list.
+        </p>
+        <p style="margin:16px 0 0;color:#777;font-size:13px;">${new Date().toUTCString()}</p>
+      </div>
+    `,
+  });
+
+  if (response.error) {
+    throw new Error(`Resend error: ${response.error.message}`);
+  }
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')

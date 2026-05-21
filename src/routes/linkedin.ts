@@ -14,6 +14,11 @@ const pool = new Pool({
 
 const LINKEDIN_SCOPES = 'openid profile email w_member_social';
 
+// In-memory profile cache — avoids a live LinkedIn API call on every Vault page load.
+// TTL: 5 minutes. Keyed by userId.
+const profileCache = new Map<string, { data: object; expiresAt: number }>();
+const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+
 // Function to save LinkedIn token to database using plain SQL
 async function saveLinkedInToken(
   userId: string,
@@ -456,6 +461,12 @@ export default async function linkedinRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ success: false, message: 'Not connected' });
       }
 
+      // Return cached profile if still fresh
+      const cached = profileCache.get(userId);
+      if (cached && cached.expiresAt > Date.now()) {
+        return reply.send({ success: true, data: cached.data });
+      }
+
       try {
         // /v2/userinfo is the correct endpoint for OIDC tokens (openid profile email scopes).
         // /v2/me with projection requires the deprecated r_liteprofile scope and returns 403/404.
@@ -464,23 +475,25 @@ export default async function linkedinRoutes(fastify: FastifyInstance) {
         });
 
         const d = response.data;
+        const profileData = {
+          firstName: d.given_name ?? null,
+          lastName: d.family_name ?? null,
+          headline: null, // not available via OIDC userinfo
+          pictureUrl: d.picture ?? null,
+          vanityName: tokenData.vanity_name ?? null,
+          personUrn: tokenData.person_urn ?? null,
+        };
 
-        return reply.send({
-          success: true,
-          data: {
-            firstName: d.given_name ?? null,
-            lastName: d.family_name ?? null,
-            headline: null, // not available via OIDC userinfo
-            pictureUrl: d.picture ?? null,
-            vanityName: tokenData.vanity_name ?? null,
-            personUrn: tokenData.person_urn ?? null,
-          },
-        });
+        profileCache.set(userId, { data: profileData, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS });
+
+        return reply.send({ success: true, data: profileData });
       } catch (error: any) {
         const status = error.response?.status;
         fastify.log.error({ status, data: error.response?.data }, 'LinkedIn /v2/userinfo error');
 
         if (status === 401) {
+          // Evict stale cache on auth failure
+          profileCache.delete(userId);
           return reply.status(401).send({ success: false, message: 'LinkedIn token expired — please reconnect' });
         }
         return reply.status(502).send({ success: false, message: 'Failed to fetch LinkedIn profile' });

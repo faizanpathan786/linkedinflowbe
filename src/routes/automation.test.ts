@@ -1,5 +1,5 @@
-import { test, describe, beforeAll, afterAll } from 'node:test';
-import * as assert from 'node:assert';
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert';
 import axios, { AxiosInstance } from 'axios';
 
 /**
@@ -35,7 +35,7 @@ function addResult(name: string, passed: boolean, message: string, error?: strin
 describe('Automation Settings API', async () => {
   let api: AxiosInstance;
 
-  beforeAll(async () => {
+  before(async () => {
     api = axios.create({
       baseURL: API_BASE_URL,
       headers: {
@@ -407,7 +407,7 @@ describe('Automation Settings API', async () => {
     }
   });
 
-  afterAll(async () => {
+  after(async () => {
     // Print summary
     console.log('\n' + '─'.repeat(80));
     const passed = results.filter((r) => r.passed).length;

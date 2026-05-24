@@ -524,23 +524,38 @@ export default async function postsRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // GET /posts — list all posts for the authenticated user
-  fastify.get('/posts', async (request: FastifyRequest, reply: FastifyReply) => {
+  // GET /posts — list posts for the authenticated user (all statuses by default)
+  fastify.get('/posts', async (request: FastifyRequest<{ Querystring: { status?: string } }>, reply: FastifyReply) => {
     const session = await auth.api.getSession({ headers: request.headers as any });
     if (!session) {
       return reply.status(401).send({ error: 'Unauthorized' });
     }
 
+    const { status } = request.query;
+    const validStatuses = ['draft', 'scheduled', 'published', 'failed', 'publishing'];
+
     const client = await pool.connect();
     try {
-      const result = await client.query(
-        `SELECT id, user_id, content, post_type, link_url, linkedin_post_id, status,
-                scheduled_at, published_at, image_type,
-                (image_base64 IS NOT NULL) AS image_base64,
-                video_storage_path, created_at, updated_at
-         FROM public.posts WHERE user_id = $1 ORDER BY created_at DESC`,
-        [session.user.id]
-      );
+      let result;
+      if (status && validStatuses.includes(status)) {
+        result = await client.query(
+          `SELECT id, user_id, content, post_type, link_url, linkedin_post_id, status,
+                  scheduled_at, published_at, image_type,
+                  (image_base64 IS NOT NULL) AS image_base64,
+                  video_storage_path, created_at, updated_at
+           FROM public.posts WHERE user_id = $1 AND status = $2 ORDER BY created_at DESC`,
+          [session.user.id, status]
+        );
+      } else {
+        result = await client.query(
+          `SELECT id, user_id, content, post_type, link_url, linkedin_post_id, status,
+                  scheduled_at, published_at, image_type,
+                  (image_base64 IS NOT NULL) AS image_base64,
+                  video_storage_path, created_at, updated_at
+           FROM public.posts WHERE user_id = $1 ORDER BY created_at DESC`,
+          [session.user.id]
+        );
+      }
       return reply.send({ posts: result.rows.map(addMediaPreviewFields) });
     } finally {
       client.release();

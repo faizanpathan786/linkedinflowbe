@@ -467,19 +467,26 @@ export default async function linkedinRoutes(fastify: FastifyInstance) {
         return reply.send({ success: true, data: cached.data });
       }
 
+      // Extract picture stored in metadata column as a fallback
+      // oauth.ts stores: { id, vanity_name, metadata: { picture, firstName, ... } }
+      const storedMeta = tokenData.metadata
+        ? (typeof tokenData.metadata === 'string' ? JSON.parse(tokenData.metadata) : tokenData.metadata)
+        : null;
+      const storedPicture: string | null =
+        storedMeta?.metadata?.picture ?? storedMeta?.picture ?? null;
+
       try {
         // /v2/userinfo is the correct endpoint for OIDC tokens (openid profile email scopes).
-        // /v2/me with projection requires the deprecated r_liteprofile scope and returns 403/404.
         const response = await axios.get('https://api.linkedin.com/v2/userinfo', {
           headers: { Authorization: `Bearer ${tokenData.access_token}` },
         });
 
         const d = response.data;
         const profileData = {
-          firstName: d.given_name ?? null,
-          lastName: d.family_name ?? null,
-          headline: null, // not available via OIDC userinfo
-          pictureUrl: d.picture ?? null,
+          firstName: d.given_name ?? storedMeta?.metadata?.firstName ?? null,
+          lastName: d.family_name ?? storedMeta?.metadata?.lastName ?? null,
+          headline: null,
+          pictureUrl: d.picture ?? storedPicture,
           vanityName: tokenData.vanity_name ?? null,
           personUrn: tokenData.person_urn ?? null,
         };
@@ -492,8 +499,22 @@ export default async function linkedinRoutes(fastify: FastifyInstance) {
         fastify.log.error({ status, data: error.response?.data }, 'LinkedIn /v2/userinfo error');
 
         if (status === 401) {
-          // Evict stale cache on auth failure
           profileCache.delete(userId);
+          // Return stored profile data with a flag so the frontend knows the token needs refresh
+          if (storedMeta) {
+            return reply.send({
+              success: true,
+              data: {
+                firstName: storedMeta?.metadata?.firstName ?? null,
+                lastName: storedMeta?.metadata?.lastName ?? null,
+                headline: null,
+                pictureUrl: storedPicture,
+                vanityName: tokenData.vanity_name ?? null,
+                personUrn: tokenData.person_urn ?? null,
+              },
+              tokenExpired: true,
+            });
+          }
           return reply.status(401).send({ success: false, message: 'LinkedIn token expired — please reconnect' });
         }
         return reply.status(502).send({ success: false, message: 'Failed to fetch LinkedIn profile' });

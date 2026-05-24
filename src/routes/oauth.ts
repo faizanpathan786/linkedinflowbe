@@ -100,16 +100,27 @@ async function oauthRoutes(fastify: FastifyInstance, options: any) {
         const profile = await linkedinService.getUserProfile(tokenData.access_token);
         const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
 
+        // Fetch vanity name (URL slug) separately — /v2/userinfo only returns display name
+        let vanityName: string | null = null;
+        try {
+          const axios = (await import('axios')).default;
+          const meRes = await axios.get('https://api.linkedin.com/v2/me?projection=(id,vanityName)', {
+            headers: { Authorization: `Bearer ${tokenData.access_token}` },
+          });
+          vanityName = meRes.data?.vanityName ?? null;
+        } catch { /* optional */ }
+
         const dbClient = await pool.connect();
         try {
           await dbClient.query(
-            `INSERT INTO public.linkedin_tokens (user_id, access_token, refresh_token, expires_at, person_urn, vanity_name, metadata)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO public.linkedin_tokens (user_id, access_token, refresh_token, expires_at, person_urn, linkedin_user_id, vanity_name, metadata)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT (user_id) DO UPDATE SET
                access_token = EXCLUDED.access_token,
                refresh_token = EXCLUDED.refresh_token,
                expires_at = EXCLUDED.expires_at,
                person_urn = EXCLUDED.person_urn,
+               linkedin_user_id = EXCLUDED.linkedin_user_id,
                vanity_name = EXCLUDED.vanity_name,
                metadata = EXCLUDED.metadata,
                updated_at = CURRENT_TIMESTAMP`,
@@ -118,8 +129,9 @@ async function oauthRoutes(fastify: FastifyInstance, options: any) {
               tokenData.access_token,
               tokenData.refresh_token || null,
               expiresAt.toISOString(),
+              `urn:li:person:${profile.id}`,
               profile.id,
-              profile.vanity_name || null,
+              vanityName,
               JSON.stringify(profile),
             ]
           );

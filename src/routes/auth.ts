@@ -201,8 +201,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
         body: { email, redirectTo: `${frontendUrl}/reset-password` },
         headers: request.headers as any,
       });
-    } catch {
-      // swallow — never reveal whether the email exists
+    } catch (err: any) {
+      fastify.log.error({ err: err.message }, 'Forgot password error');
     }
 
     return reply.send({

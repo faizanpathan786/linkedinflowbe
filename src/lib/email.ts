@@ -379,21 +379,92 @@ export async function sendPasswordResetEmail(
 }
 
 export async function sendEarlyAccessNotificationEmail(signupEmail: string): Promise<void> {
-  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminEmail = process.env.ADMIN_EMAIL?.trim();
   if (!adminEmail) return;
+
+  const now = new Date().toLocaleString('en-US', {
+    weekday: 'short', year: 'numeric', month: 'short',
+    day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+  });
 
   const response = await resend.emails.send({
     from: process.env.RESEND_FROM || 'onboarding@resend.dev',
     to: adminEmail,
-    subject: `New Early Access Signup: ${signupEmail}`,
+    subject: `🎉 New Early Access Request — ${escapeHtml(signupEmail)}`,
     html: `
-      <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#f4f6f8;border-radius:12px;">
-        <h2 style="margin:0 0 12px;color:#0a66c2;">New Early Access Signup</h2>
-        <p style="margin:0;color:#333;font-size:16px;">
-          <strong>${escapeHtml(signupEmail)}</strong> just joined the early access list.
-        </p>
-        <p style="margin:16px 0 0;color:#777;font-size:13px;">${new Date().toUTCString()}</p>
-      </div>
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background-color:#f0f4f8;font-family:'Segoe UI',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f4f8;padding:40px 0;">
+    <tr><td align="center">
+
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+
+        <!-- Header -->
+        <tr>
+          <td style="background:linear-gradient(135deg,#0a66c2 0%,#0d4f9e 100%);padding:36px 40px;text-align:center;">
+            <h1 style="margin:0;font-size:26px;font-weight:700;color:#ffffff;letter-spacing:-0.5px;">LinkedinFlow</h1>
+            <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.75);letter-spacing:0.5px;text-transform:uppercase;">Early Access Program</p>
+          </td>
+        </tr>
+
+        <!-- Icon + Title -->
+        <tr>
+          <td style="padding:40px 40px 0;text-align:center;">
+            <div style="display:inline-block;background:#e8f4fd;border-radius:50%;width:64px;height:64px;line-height:64px;font-size:28px;">🚀</div>
+            <h2 style="margin:16px 0 8px;font-size:22px;font-weight:700;color:#0f1923;">New Signup!</h2>
+            <p style="margin:0;font-size:15px;color:#6b7280;">Someone just requested early access to LinkedinFlow.</p>
+          </td>
+        </tr>
+
+        <!-- Email Card -->
+        <tr>
+          <td style="padding:28px 40px;">
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px 24px;">
+              <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">Email Address</p>
+              <p style="margin:0;font-size:18px;font-weight:600;color:#0a66c2;">${escapeHtml(signupEmail)}</p>
+            </div>
+          </td>
+        </tr>
+
+        <!-- Meta -->
+        <tr>
+          <td style="padding:0 40px 32px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px 24px;">
+                  <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td style="font-size:13px;color:#6b7280;">📅 Signed up at</td>
+                      <td style="font-size:13px;color:#374151;font-weight:500;text-align:right;">${now}</td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Divider -->
+        <tr><td style="padding:0 40px;"><hr style="border:none;border-top:1px solid #f1f5f9;margin:0;"></td></tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:24px 40px;text-align:center;">
+            <p style="margin:0;font-size:13px;color:#9ca3af;">
+              This is an automated notification from <strong style="color:#0a66c2;">LinkedinFlow</strong>.<br>
+              You're receiving this because you're the app admin.
+            </p>
+          </td>
+        </tr>
+
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>
     `,
   });
 

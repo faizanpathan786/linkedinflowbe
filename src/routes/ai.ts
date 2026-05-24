@@ -1,14 +1,15 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
-import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 import { auth } from '../auth';
 
 const anthropicClient = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const groqClient = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+const openRouterClient = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: 'https://openrouter.ai/api/v1',
 });
 
 interface GeneratePostBody {
@@ -27,8 +28,16 @@ interface GeneratePostBody {
   };
 }
 
-function buildSystemPrompt(_brand_voice: GeneratePostBody['brand_voice'], _style: string): string {
+export function buildSystemPrompt(brand_voice: GeneratePostBody['brand_voice'], _style: string): string {
+  const examplesBlock = brand_voice?.examples?.trim()
+    ? `\nYou write exactly like this person. Study these example posts and mirror their sentence length, rhythm, hook style, closing style, and vocabulary:\n\nEXAMPLE POSTS:\n${brand_voice.examples.trim()}\n`
+    : '';
+
+  const toneBlock = brand_voice?.tone?.trim() ? `\nTone: ${brand_voice.tone.trim()}` : '';
+  const styleBlock = brand_voice?.style?.trim() ? `\nVoice notes: ${brand_voice.style.trim()}` : '';
+
   return `You are a world-class LinkedIn ghostwriter for B2B founders. Your posts consistently go viral because they feel personal, earned, and specific — never generic, never corporate.
+${examplesBlock}${toneBlock}${styleBlock}
 
 Your writing rules:
 - Open with a hook that stops the scroll in the first 2 seconds
@@ -38,7 +47,15 @@ Your writing rules:
 - End with something that makes the reader think or act
 - Never use: "In today's world", "I'm excited to share", "Game-changer", "Leverage", "Synergy", "Thrilled", "Journey", "Hustle"
 - No corporate jargon, no buzzwords, no filler
-- Max 280 words per post`;
+- Max 280 words per post
+
+Anti-AI rules (never violate):
+- No hedging: never write "it's important to", "I think", "perhaps", "one might", "it's worth noting"
+- No throat-clearing openers: never start with "As a [title]", "In my experience", "I wanted to share", "I'm proud to"
+- No passive voice — every sentence has an active subject doing something
+- No filler transitions: never use "Furthermore", "Moreover", "In conclusion", "At the end of the day", "Having said that"
+- No motivational poster language: never write "Success is a journey", "Embrace the process", "Every challenge is an opportunity"
+- If example posts are provided above, mirror their sentence rhythm exactly`;
 }
 
 function buildUserPrompt(
@@ -118,8 +135,8 @@ export default async function aiRoutes(fastify: FastifyInstance) {
       }
 
       const callGroq = async () => {
-        const completion = await groqClient.chat.completions.create({
-          model: 'openai/gpt-oss-120b',
+        const completion = await openRouterClient.chat.completions.create({
+          model: 'openai/gpt-4o-mini',
           messages: [
             { role: 'system', content: buildSystemPrompt(brand_voice, style) },
             { role: 'user', content: buildUserPrompt(answers, style, brand_voice) },
@@ -198,12 +215,23 @@ export default async function aiRoutes(fastify: FastifyInstance) {
       const userMessage = `Brand voice: ${brandVoiceText}\n\nOriginal caption:\n${content}`;
 
       try {
-        const completion = await groqClient.chat.completions.create({
-          model: 'openai/gpt-oss-120b',
+        const completion = await openRouterClient.chat.completions.create({
+          model: 'openai/gpt-4o-mini',
           messages: [
             {
               role: 'system',
               content: `You are a LinkedIn content expert. Rewrite the user's raw caption into a high-performing LinkedIn post.
+
+Brand voice context:
+${brandVoiceText}
+
+Anti-AI rules (never violate):
+- No hedging: never write "it's important to", "I think", "perhaps", "one might", "it's worth noting"
+- No throat-clearing openers: never start with "As a [title]", "In my experience", "I wanted to share", "I'm proud to"
+- No passive voice — every sentence has an active subject doing something
+- No filler transitions: never use "Furthermore", "Moreover", "In conclusion", "At the end of the day"
+- No motivational poster language: never write "Success is a journey", "Embrace the process"
+- If example posts are in the brand voice context above, mirror their sentence rhythm exactly
 
 Rules:
 - Keep the original message and facts — do NOT invent new information
@@ -213,7 +241,6 @@ Rules:
 - End with a clear call-to-action or thought-provoking question
 - Sound human and professional — no corporate buzzwords, no cringe
 - Stay under 3000 characters
-- If brand voice settings are provided, match that tone and style
 
 Return ONLY the rewritten post text. No explanation, no preamble, no quotes around it.`,
             },

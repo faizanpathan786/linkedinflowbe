@@ -7,6 +7,39 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+async function ensureIdeasTable(): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TABLE IF NOT EXISTS public.ideas (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        tag TEXT NOT NULL DEFAULT 'thought' CHECK (tag IN ('win', 'lesson', 'opinion', 'thought', 'update', 'question')),
+        captured_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ideas_user_id ON public.ideas(user_id);
+
+      CREATE OR REPLACE TRIGGER update_ideas_updated_at
+        BEFORE UPDATE ON public.ideas
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+  } finally {
+    client.release();
+  }
+}
+
 async function getUserId(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
   try {
     const session = await auth.api.getSession({ headers: request.headers as any });
@@ -22,6 +55,12 @@ async function getUserId(request: FastifyRequest, reply: FastifyReply): Promise<
 }
 
 export default async function contentRoutes(fastify: FastifyInstance) {
+  try {
+    await ensureIdeasTable();
+  } catch (err: any) {
+    fastify.log.error('Failed to initialize ideas table:', err.message);
+  }
+
   // ── Ideas ──────────────────────────────────────────────────────────────────
 
   fastify.get('/ideas', async (request, reply) => {

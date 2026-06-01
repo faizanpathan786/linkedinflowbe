@@ -31,7 +31,9 @@ async function ensureIdeasTable(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_ideas_user_id ON public.ideas(user_id);
 
-      CREATE OR REPLACE TRIGGER update_ideas_updated_at
+      DROP TRIGGER IF EXISTS update_ideas_updated_at ON public.ideas;
+
+      CREATE TRIGGER update_ideas_updated_at
         BEFORE UPDATE ON public.ideas
         FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     `);

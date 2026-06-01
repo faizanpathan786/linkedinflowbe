@@ -9,6 +9,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const { default: server } = await import('../src/server');
       await server.ready();
       serverInstance = server;
+      console.log('[routes]', server.printRoutes());
     }
 
     serverInstance.server.emit('request', req, res);

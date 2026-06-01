@@ -57,7 +57,7 @@ server.register(multipart, {
 // Ensure Supabase Storage bucket exists for videos
 ensureVideoBucket().catch((err) => server.log.error('Failed to create video storage bucket:', err?.message));
 
-server.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString(), version: 'v7-video' }));
+server.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString(), version: 'v7-video', commit: process.env.VERCEL_GIT_COMMIT_SHA ?? 'local' }));
 server.get('/debug/routes', async () => ({ routes: server.printRoutes() }));
 
 // POST /posts/import — registered at top level to guarantee route registration

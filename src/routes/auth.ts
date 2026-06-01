@@ -22,6 +22,11 @@ async function forwardAuthResponse(
     } catch {
       body = { message: text };
     }
+    // Forward set-cookie headers so the session cookie reaches the browser
+    const setCookie = response.headers.getSetCookie?.() ?? [];
+    for (const cookie of setCookie) {
+      reply.header('set-cookie', cookie);
+    }
     return reply.status(response.status).send(body);
   } catch (err: any) {
     console.error('better-auth error:', err?.message, err?.stack);

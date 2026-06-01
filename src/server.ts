@@ -28,11 +28,25 @@ const server = Fastify({
 });
 
 server.register(cors, {
-  origin: true,
+  origin: (origin, cb) => {
+    const allowed = [
+      'http://localhost:3000',
+      'http://localhost:4000',
+      'https://linkedinflow.vercel.app',
+      'https://linkedinflowbe.vercel.app',
+      process.env.FRONTEND_URL,
+    ].filter(Boolean);
+    if (!origin || allowed.includes(origin)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Not allowed by CORS'), false);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
   exposedHeaders: ['set-cookie'],
+  strictPreflight: false,
 });
 
 server.register(multipart, {

@@ -27,7 +27,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       serverInstance = server;
     }
 
+    const originalUrl = req.url;
     (req as any).url = normalizeRequestUrl(req.url);
+    console.log(`[handler] ${req.method} ${originalUrl} → ${(req as any).url}`);
     serverInstance.server.emit('request', req, res);
   } catch (err: any) {
     console.error('Fastify startup error:', err?.message, err?.stack);

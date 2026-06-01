@@ -23,6 +23,8 @@ const trustedOrigins = Array.from(
             process.env.VERCEL_PROJECT_PRODUCTION_URL
                 ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
                 : null,
+            'https://linkedinflow.vercel.app',
+            'https://linkedinflowbe.vercel.app',
             'http://localhost:3000',
             'http://localhost:4000',
         ].filter((origin): origin is string => Boolean(origin))

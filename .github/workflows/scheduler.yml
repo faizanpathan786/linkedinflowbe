@@ -1,0 +1,14 @@
+name: Scheduler
+
+  on:
+    schedule:
+      - cron: '* * * * *'
+
+  jobs:
+    run:
+      runs-on: ubuntu-latest
+      steps:
+        - name: Trigger scheduler
+          run: |
+            curl -X GET "https://linkedinflowbe.onrender.com/scheduler/run" \
+              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"

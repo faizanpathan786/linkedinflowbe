@@ -19,6 +19,7 @@ import { downloadVideoFromUrl, uploadVideoToStorage, ensureVideoBucket, getVideo
 const importPool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
+  max: 30,
 });
 
 const server = Fastify({

@@ -197,7 +197,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     );
   });
 
-  fastify.post('/api/auth/forgot-password', async (request: FastifyRequest, reply: FastifyReply) => {
+  const forgotPasswordHandler = async (request: FastifyRequest, reply: FastifyReply) => {
     const { email } = request.body as { email: string };
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
@@ -214,9 +214,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
       success: true,
       message: 'If this email is registered, a reset link has been sent.',
     });
-  });
+  };
 
-  fastify.post('/api/auth/reset-password', async (request: FastifyRequest, reply: FastifyReply) => {
+  const resetPasswordHandler = async (request: FastifyRequest, reply: FastifyReply) => {
     const { token, password } = request.body as { token: string; password: string };
 
     try {
@@ -238,5 +238,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
       }
       throw err;
     }
-  });
+  };
+
+  // Register at both path forms: the frontend calls /api/forgot-password and
+  // /api/reset-password, while /api/auth/* is kept for backward compatibility.
+  fastify.post('/api/auth/forgot-password', forgotPasswordHandler);
+  fastify.post('/api/forgot-password', forgotPasswordHandler);
+  fastify.post('/api/auth/reset-password', resetPasswordHandler);
+  fastify.post('/api/reset-password', resetPasswordHandler);
 }

@@ -20,10 +20,11 @@ server.listen(
     }
 
     server.log.info(`Server running on ${address}`);
-    // Only run node-cron locally — in production Vercel Cron calls /scheduler/run
-    if (process.env.NODE_ENV !== 'production') {
-      startScheduler(server);
-    }
+    // This entrypoint only runs on the persistent server (Render / local), not
+    // on Vercel serverless (which uses api/index.ts). A long-running process can
+    // run node-cron reliably, so start the in-process scheduler here — it polls
+    // for due posts every minute, avoiding dependence on an external cron ping.
+    startScheduler(server);
   },
 );
 

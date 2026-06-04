@@ -39,15 +39,17 @@ export default async function earlyAccessRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({ success: false, error: 'Database error' });
       }
 
-      fastify.log.info({ rowCount: result.rowCount, adminEmail: process.env.ADMIN_EMAIL }, 'Early access insert result');
+      const isNewSignup = !!(result.rowCount && result.rowCount > 0);
+      fastify.log.info({ rowCount: result.rowCount, isNewSignup, adminEmail: process.env.ADMIN_EMAIL }, 'Early access insert result');
 
-      if (result.rowCount && result.rowCount > 0) {
-        try {
-          await sendEarlyAccessNotificationEmail(email.trim().toLowerCase());
-          fastify.log.info('Early access notification email sent');
-        } catch (err: any) {
-          fastify.log.error({ err: err.message }, 'Early access email failed');
-        }
+      // Notify the admin on every submission (not just new signups), so repeated
+      // requests for the same email still send an alert. The DB still de-dupes via
+      // ON CONFLICT, so we don't accumulate duplicate rows.
+      try {
+        await sendEarlyAccessNotificationEmail(email.trim().toLowerCase());
+        fastify.log.info({ isNewSignup }, 'Early access notification email sent');
+      } catch (err: any) {
+        fastify.log.error({ err: err.message }, 'Early access email failed');
       }
 
       return reply.send({ success: true });

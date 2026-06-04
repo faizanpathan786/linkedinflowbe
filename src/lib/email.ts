@@ -1,6 +1,29 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Gmail SMTP transport. Sends from a Gmail account using an App Password
+// (myaccount.google.com → Security → 2-Step Verification → App passwords).
+// Unlike Resend's free tier, this delivers to any recipient (~500/day).
+const SMTP_USER = process.env.SMTP_USER || 'linkedinflow22@gmail.com';
+const SMTP_PASSWORD = process.env.SMTP_PASSWORD;
+// Gmail rewrites the From to the authenticated account, so keep it consistent.
+const MAIL_FROM = process.env.MAIL_FROM || `LFlow <${SMTP_USER}>`;
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: { user: SMTP_USER, pass: SMTP_PASSWORD },
+});
+
+async function sendEmail(opts: { to: string; subject: string; html: string }): Promise<void> {
+  if (!SMTP_USER || !SMTP_PASSWORD) {
+    throw new Error('SMTP not configured: set SMTP_USER and SMTP_PASSWORD (Gmail App Password)');
+  }
+  await transporter.sendMail({
+    from: MAIL_FROM,
+    to: opts.to,
+    subject: opts.subject,
+    html: opts.html,
+  });
+}
 
 export async function sendPostPublishedEmail(
   userEmail: string,
@@ -18,8 +41,7 @@ export async function sendPostPublishedEmail(
     minute: '2-digit',
   });
 
-  const response = await resend.emails.send({
-    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+  await sendEmail({
     to: userEmail,
     subject: '✨ Your LinkedIn Post Was Published – LFlow',
     html: `
@@ -115,10 +137,6 @@ export async function sendPostPublishedEmail(
       </div>
     `,
   });
-
-  if (response.error) {
-    throw new Error(`Resend error: ${response.error.message}`);
-  }
 }
 
 export async function sendPostFailedEmail(
@@ -130,8 +148,7 @@ export async function sendPostFailedEmail(
   const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
   const preview = postContent.length > 200 ? postContent.slice(0, 200) + '…' : postContent;
 
-  const response = await resend.emails.send({
-    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+  await sendEmail({
     to: userEmail,
     subject: '⚠️ Your LinkedIn Post Failed to Publish – LFlow',
     html: `
@@ -183,10 +200,6 @@ export async function sendPostFailedEmail(
       </div>
     `,
   });
-
-  if (response.error) {
-    throw new Error(`Resend error: ${response.error.message}`);
-  }
 }
 
 export async function sendWeeklyDigestEmail(
@@ -202,8 +215,7 @@ export async function sendWeeklyDigestEmail(
 ): Promise<void> {
   const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
-  const response = await resend.emails.send({
-    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+  await sendEmail({
     to: userEmail,
     subject: `📊 Your Weekly LFlow Report – ${stats.weekOf}`,
     html: `
@@ -271,10 +283,6 @@ export async function sendWeeklyDigestEmail(
       </div>
     `,
   });
-
-  if (response.error) {
-    throw new Error(`Resend error: ${response.error.message}`);
-  }
 }
 
 export async function sendPasswordResetEmail(
@@ -284,8 +292,7 @@ export async function sendPasswordResetEmail(
 ): Promise<void> {
   const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
-  const response = await resend.emails.send({
-    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+  await sendEmail({
     to: userEmail,
     subject: '🔐 Reset Your LFlow Password',
     html: `
@@ -372,10 +379,6 @@ export async function sendPasswordResetEmail(
       </div>
     `,
   });
-
-  if (response.error) {
-    throw new Error(`Resend error: ${response.error.message}`);
-  }
 }
 
 export async function sendEarlyAccessNotificationEmail(signupEmail: string): Promise<void> {
@@ -387,8 +390,7 @@ export async function sendEarlyAccessNotificationEmail(signupEmail: string): Pro
     day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
   });
 
-  const response = await resend.emails.send({
-    from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+  await sendEmail({
     to: adminEmail,
     subject: `🎉 New Early Access Request — ${escapeHtml(signupEmail)}`,
     html: `
@@ -467,10 +469,6 @@ export async function sendEarlyAccessNotificationEmail(signupEmail: string): Pro
 </html>
     `,
   });
-
-  if (response.error) {
-    throw new Error(`Resend error: ${response.error.message}`);
-  }
 }
 
 function escapeHtml(str: string): string {

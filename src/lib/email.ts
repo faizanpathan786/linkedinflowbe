@@ -13,7 +13,7 @@ const transporter = nodemailer.createTransport({
   auth: { user: SMTP_USER, pass: SMTP_PASSWORD },
 });
 
-async function sendEmail(opts: { to: string; subject: string; html: string }): Promise<void> {
+async function sendEmail(opts: { to: string; subject: string; html: string; replyTo?: string }): Promise<void> {
   if (!SMTP_USER || !SMTP_PASSWORD) {
     throw new Error('SMTP not configured: set SMTP_USER and SMTP_PASSWORD (Gmail App Password)');
   }
@@ -22,6 +22,7 @@ async function sendEmail(opts: { to: string; subject: string; html: string }): P
     to: opts.to,
     subject: opts.subject,
     html: opts.html,
+    ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
   });
 }
 
@@ -467,6 +468,58 @@ export async function sendEarlyAccessNotificationEmail(signupEmail: string): Pro
   </table>
 </body>
 </html>
+    `,
+  });
+}
+
+export async function sendContactEmail(name: string, email: string, message: string): Promise<void> {
+  const adminEmail = process.env.ADMIN_EMAIL?.trim();
+  if (!adminEmail) {
+    throw new Error('ADMIN_EMAIL not configured');
+  }
+
+  await sendEmail({
+    to: adminEmail,
+    replyTo: email, // so you can hit Reply in Gmail and respond to the sender directly
+    subject: `📬 New Contact Message from ${name}`,
+    html: `
+      <div style="margin:0;padding:0;background-color:#f4f6f8;font-family:Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 25px rgba(0,0,0,0.08);">
+              <tr>
+                <td style="background:linear-gradient(135deg,#0a66c2,#0077b5);padding:25px;text-align:center;color:#fff;">
+                  <h1 style="margin:0;font-size:24px;">LFlow</h1>
+                  <p style="margin:5px 0 0;font-size:14px;opacity:0.8;">Contact Form Submission</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:30px;text-align:center;">
+                  <h2 style="margin:0;color:#111;">New Contact Message 📬</h2>
+                  <p style="color:#555;font-size:15px;">Someone reached out through your Contact Us form.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 30px 20px;">
+                  <p style="margin:0 0 6px;color:#333;"><strong>Name:</strong> ${escapeHtml(name)}</p>
+                  <p style="margin:0 0 16px;color:#333;"><strong>Email:</strong> <a href="mailto:${escapeHtml(email)}" style="color:#0a66c2;">${escapeHtml(email)}</a></p>
+                  <div style="background:#f3f2ef;border-left:4px solid #0a66c2;padding:14px 16px;border-radius:4px;">
+                    <p style="margin:0;color:#333;font-size:14px;white-space:pre-wrap;">${escapeHtml(message)}</p>
+                  </div>
+                  <p style="margin:16px 0 0;color:#999;font-size:12px;">Reply to this email to respond directly to ${escapeHtml(name)}.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:20px 30px;text-align:center;color:#777;font-size:13px;">
+                  <p style="margin:0;"><strong>The LFlow Team</strong></p>
+                  <p style="margin-top:10px;font-size:11px;color:#aaa;">© 2026 LFlow. All rights reserved.</p>
+                </td>
+              </tr>
+            </table>
+            <div style="height:20px;"></div>
+          </td></tr>
+        </table>
+      </div>
     `,
   });
 }

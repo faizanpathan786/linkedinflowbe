@@ -13,6 +13,7 @@ import automationRoutes from './routes/automation';
 import contentRoutes from './routes/content';
 import notificationsRoutes from './routes/notifications';
 import earlyAccessRoutes from './routes/early-access';
+import contactRoutes from './routes/contact';
 import { auth } from './auth';
 import { downloadVideoFromUrl, uploadVideoToStorage, ensureVideoBucket, getVideoPublicUrl } from './lib/supabase';
 
@@ -229,5 +230,6 @@ server.register(automationRoutes);
 server.register(contentRoutes);
 server.register(notificationsRoutes);
 server.register(earlyAccessRoutes);
+server.register(contactRoutes);
 
 export default server;
